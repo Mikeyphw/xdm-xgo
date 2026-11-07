@@ -101,6 +101,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          bash app/XDM.Android/tools/provision-hosted-emulator-runtime.sh --prepare
           sdkmanager --install 'platforms;android-36' 'build-tools;36.0.0'
           for attempt in 1 2 3; do
             if sdkmanager --install 'emulator' 'system-images;android-36;google_apis;x86_64'; then
@@ -113,7 +114,7 @@ jobs:
             sleep 10
           done
           sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?}}"
-          "$sdk_root/emulator/emulator" -version >/dev/null 2>&1
+          bash app/XDM.Android/tools/provision-hosted-emulator-runtime.sh --verify "$sdk_root"
           test -d "$sdk_root/system-images/android-36/google_apis/x86_64"
           avd_root="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
           mkdir -p "$avd_root"
@@ -209,6 +210,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          bash tools/provision-hosted-emulator-runtime.sh --prepare
           sdkmanager --install 'platforms;android-36' 'build-tools;36.0.0'
           for attempt in 1 2 3; do
             if sdkmanager --install 'emulator' 'system-images;android-36;google_apis;x86_64'; then
@@ -221,7 +223,7 @@ jobs:
             sleep 10
           done
           sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?}}"
-          "$sdk_root/emulator/emulator" -version >/dev/null 2>&1
+          bash tools/provision-hosted-emulator-runtime.sh --verify "$sdk_root"
           test -d "$sdk_root/system-images/android-36/google_apis/x86_64"
           avd_root="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
           mkdir -p "$avd_root"
