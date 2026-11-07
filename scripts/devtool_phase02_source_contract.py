@@ -19,8 +19,16 @@ def validate(root: Path) -> None:
     assert 'analyze_affected_targets' in script
     assert "'unknown_file': 'workspace-wide'" in script
     workflow = (root / '.github/workflows/android.yml').read_text(encoding='utf-8')
-    assert workflow.count('android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd') == 2, 'pinned Android setup v4.0.4 action drift'
-    assert workflow.count("packages: 'platform-tools'") >= 2
+    pinned_action = 'android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd'
+    # HF11: HF10 provisions SDK tools separately in validate, instrumentation,
+    # and signed-release. Validate each job, not the obsolete total of two.
+    import re
+    for name in ("validate", "instrumentation", "signed-release"):
+        match = re.search(rf"(?ms)^  {re.escape(name)}:\n(.*?)(?=^  [a-zA-Z][\w-]*:\n|\Z)", workflow)
+        assert match is not None, f"missing {name} Android job"
+        job = match.group(1)
+        assert job.count(pinned_action) == 1, f"{name} pinned Android setup action drift"
+        assert "packages: 'platform-tools'" in job, f"{name} platform-tools provisioning drift"
     assert "startsWith(github.ref, 'refs/tags/android-v')" in workflow
     assert "inputs.signed_release" in workflow
     assert "github.event_name == 'workflow_dispatch' || startsWith" not in workflow

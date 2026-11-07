@@ -67,8 +67,15 @@ def main() -> None:
     root_workflow=(REPO/'.github/workflows/android.yml')
     if root_workflow.is_file():
         wf=root_workflow.read_text(encoding='utf-8')
-        for n in ['validate-xar16-release-evidence-seal.py','run-xar16-signed-release-gate.sh --ci','XDM_RELEASE_CERTIFICATE_NOT_AFTER','XDM_XAR16_PREVIOUS_RELEASE_APK']:
+        for n in ['validate-xar16-release-evidence-seal.py','XDM_RELEASE_CERTIFICATE_NOT_AFTER','XDM_XAR16_PREVIOUS_RELEASE_APK']:
             must(wf,n,'root workflow XAR16 release wiring')
+        signed_job = wf.split('\n  signed-release:\n', 1)
+        if len(signed_job) == 2 and 'script: bash app/XDM.Android/tools/run-hosted-emulator-instrumentation.sh --signed-release' in signed_job[1]:
+            must(read('tools/run-hosted-emulator-instrumentation.sh'),
+                 'bash tools/run-xar16-signed-release-gate.sh --ci',
+                 'HF10 hosted emulator wrapper must retain XAR16 release delegation')
+        else:
+            must(wf,'bash tools/run-xar16-signed-release-gate.sh --ci','root workflow XAR16 release wiring')
     inner=(ROOT/'.github/workflows/android.yml')
     if inner.is_file():
         iw=inner.read_text(encoding='utf-8')

@@ -75,10 +75,17 @@ for needle in ['SHA256SUMS','SHA512SUMS','release-metadata.json','publicationReq
     require(needle in pub, f'publication bundle missing {needle}')
 for needle in ['signed-release:', 'XDM_RELEASE_KEYSTORE_BASE64', 'XDM_RELEASE_SIGNER_SHA256', 'BUNDLETOOL_JAR=', 'ensure-bundletool.py', 'ndk;${XDM_ANDROID_NDK_VERSION}', 'actions/attest', 'xdm-android-signed-release']:
     require(needle in workflow, f'Android workflow missing {needle}')
+signed_job = workflow.split('\n  signed-release:\n', 1)
+hosted_runner = repo_text('app/XDM.Android/tools/run-hosted-emulator-instrumentation.sh')
 require(
     'bash tools/run-bug-hunt-phase10-release-gate.sh' in workflow
-    or 'bash tools/run-xar16-signed-release-gate.sh --ci' in workflow,
-    'Android workflow must run the retained Phase10 signed-release gate or the superseding XAR16 signed-release gate',
+    or 'bash tools/run-xar16-signed-release-gate.sh --ci' in workflow
+    or (
+        len(signed_job) == 2
+        and 'script: bash app/XDM.Android/tools/run-hosted-emulator-instrumentation.sh --signed-release' in signed_job[1]
+        and 'bash tools/run-xar16-signed-release-gate.sh --ci' in hosted_runner
+    ),
+    'Android signed-release job must invoke Phase10/XAR16 gate directly or through the HF10 guarded emulator wrapper',
 )
 require('app/build/outputs/apk/release/*.apk' not in workflow.split('xdm-android-debug-artifacts',1)[0], 'debug validation job must not search release APK output')
 for needle in ['versionCode 22','versionName 0.21.0','APK-set','16 KB native alignment','device-to-device transfer','SBOM','provenance','checksum attestation','Phase 10 r2 gap closure','Room schema 17','pinned aria2 source build']:
