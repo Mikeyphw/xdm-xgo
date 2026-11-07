@@ -115,7 +115,7 @@ jobs:
           - os: windows-latest
             rid: win-x64
             shell: pwsh
-          - os: windows-latest
+          - os: windows-11-vs2026-arm
             rid: win-arm64
             shell: pwsh
     runs-on: ${{ matrix.os }}
@@ -128,7 +128,6 @@ jobs:
         with:
           global-json-file: global.json
       - uses: actions/setup-go@v5
-        if: runner.os == 'Linux'
         with:
           go-version-file: engine/go.mod
       - name: Publish and package Linux

@@ -94,6 +94,16 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.7.1'
+      - name: Require KVM acceleration for Android instrumentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -c /dev/kvm ]]; then
+            echo "::error::/dev/kvm is unavailable; refusing unaccelerated Android instrumentation"
+            exit 1
+          fi
+          sudo chmod 0666 /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
       - name: Android instrumentation matrix
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -101,6 +111,7 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-animations: true
+          disable-linux-hw-accel: false
           script: cd app/XDM.Android && bash tools/run-bug-hunt-phase11-validation-matrix.sh --device-only
 
   signed-release:
@@ -163,6 +174,16 @@ jobs:
           test -n "$XDM_PREVIOUS_RELEASE_APK_SHA256"
           curl --fail --location --proto '=https' "$XDM_PREVIOUS_RELEASE_APK_URL" --output "$XDM_XAR16_PREVIOUS_RELEASE_APK"
           printf '%s  %s\n' "$XDM_PREVIOUS_RELEASE_APK_SHA256" "$XDM_XAR16_PREVIOUS_RELEASE_APK" | sha256sum --check --strict
+      - name: Require KVM acceleration for Android instrumentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -c /dev/kvm ]]; then
+            echo "::error::/dev/kvm is unavailable; refusing unaccelerated Android instrumentation"
+            exit 1
+          fi
+          sudo chmod 0666 /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
       - name: Signed release, instrumentation, install, upgrade, and reboot gate
         uses: reactivecircus/android-emulator-runner@v2
         with:
@@ -170,6 +191,7 @@ jobs:
           arch: x86_64
           profile: pixel_6
           disable-animations: true
+          disable-linux-hw-accel: false
           script: cd app/XDM.Android && ./gradlew :app:connectedDebugAndroidTest && bash tools/run-xar16-signed-release-gate.sh --ci
       - name: Attest Android publication metadata
         uses: actions/attest@v4

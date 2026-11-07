@@ -39,12 +39,18 @@ jobs:
       - name: Linux x64 final-gate package smoke
         if: runner.os == 'Linux'
         run: bash app/XDM/eng/smoke-package.sh linux-x64
-      - name: Windows final-gate package smoke matrix
+      - uses: actions/setup-go@v5
+        if: runner.os == 'Windows'
+        with:
+          go-version-file: engine/go.mod
+      - name: Windows SQLite embedded CGO regression
         if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          ./app/XDM/eng/smoke-package.ps1 -Runtime win-x64
-          ./app/XDM/eng/smoke-package.ps1 -Runtime win-arm64 -PublishOnly
+        run: go test -count=1 ./engine/store/sqlite
+      - name: Windows x64 final-gate package smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./app/XDM/eng/smoke-package.ps1 -Runtime win-x64
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -83,4 +89,36 @@ jobs:
         with:
           name: final-gate-Linux-arm64
           path: artifacts/smoke/linux-arm64
+          if-no-files-found: ignore
+
+  native-windows-arm64:
+    # Native ARM64 c-shared builds must not be faked by an x64-only publish.
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: engine/go.mod
+      - name: Windows ARM64 SQLite and Go C compiler preflight
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((& go env GOOS).Trim() -ne 'windows' -or (& go env GOARCH).Trim() -ne 'arm64') {
+            throw 'Expected a native Windows ARM64 runner'
+          }
+          & go env CGO_ENABLED CC
+          & go test -count=1 ./engine/store/sqlite
+          if ($LASTEXITCODE -ne 0) { throw 'Windows ARM64 embedded SQLite tests failed' }
+      - name: Windows ARM64 native package and bootstrap smoke
+        shell: pwsh
+        run: ./app/XDM/eng/smoke-package.ps1 -Runtime win-arm64
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: final-gate-Windows-arm64
+          path: artifacts/smoke/win-arm64
           if-no-files-found: ignore
