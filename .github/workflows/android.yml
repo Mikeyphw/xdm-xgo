@@ -83,7 +83,7 @@ jobs:
 
   instrumentation:
     needs: validate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -91,9 +91,35 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
+        with:
+          packages: 'platform-tools'
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.7.1'
+      - name: Provision Cinderbox-proven API36 Google APIs image
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager --install 'platforms;android-36' 'build-tools;36.0.0'
+          for attempt in 1 2 3; do
+            if sdkmanager --install 'emulator' 'system-images;android-36;google_apis;x86_64'; then
+              break
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              echo "::error::XDM_API36_IMAGE_INSTALL_FAILED"
+              exit 1
+            fi
+            sleep 10
+          done
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?}}"
+          "$sdk_root/emulator/emulator" -version >/dev/null 2>&1
+          test -d "$sdk_root/system-images/android-36/google_apis/x86_64"
+          avd_root="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
+          mkdir -p "$avd_root"
+          available_kib="$(df -Pk "$avd_root" | awk 'END {print $4}')"
+          [[ "$available_kib" =~ ^[0-9]+$ ]] || { echo "::error::XDM_AVD_DISK_QUERY_FAILED"; exit 1; }
+          (( available_kib >= 4 * 1024 * 1024 )) || { echo "::error::XDM_AVD_DISK_INSUFFICIENT"; exit 1; }
       - name: Require KVM acceleration for Android instrumentation
         shell: bash
         run: |
@@ -105,18 +131,23 @@ jobs:
           sudo chmod 0666 /dev/kvm
           test -r /dev/kvm && test -w /dev/kvm
       - name: Android instrumentation matrix
-        uses: reactivecircus/android-emulator-runner@v2
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
         with:
-          api-level: 35
+          api-level: 36
+          target: google_apis
           arch: x86_64
           profile: pixel_6
+          cores: 2
+          ram-size: 2048M
+          disk-size: 3072M
           disable-animations: true
           disable-linux-hw-accel: false
-          script: cd app/XDM.Android && bash tools/run-bug-hunt-phase11-validation-matrix.sh --device-only
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
+          script: bash app/XDM.Android/tools/run-hosted-emulator-instrumentation.sh --device
 
   signed-release:
     if: startsWith(github.ref, 'refs/tags/android-v') && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.signed_release))
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 100
     permissions:
       contents: read
@@ -174,6 +205,29 @@ jobs:
           test -n "$XDM_PREVIOUS_RELEASE_APK_SHA256"
           curl --fail --location --proto '=https' "$XDM_PREVIOUS_RELEASE_APK_URL" --output "$XDM_XAR16_PREVIOUS_RELEASE_APK"
           printf '%s  %s\n' "$XDM_PREVIOUS_RELEASE_APK_SHA256" "$XDM_XAR16_PREVIOUS_RELEASE_APK" | sha256sum --check --strict
+      - name: Provision Cinderbox-proven API36 Google APIs image
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager --install 'platforms;android-36' 'build-tools;36.0.0'
+          for attempt in 1 2 3; do
+            if sdkmanager --install 'emulator' 'system-images;android-36;google_apis;x86_64'; then
+              break
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              echo "::error::XDM_API36_IMAGE_INSTALL_FAILED"
+              exit 1
+            fi
+            sleep 10
+          done
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?}}"
+          "$sdk_root/emulator/emulator" -version >/dev/null 2>&1
+          test -d "$sdk_root/system-images/android-36/google_apis/x86_64"
+          avd_root="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
+          mkdir -p "$avd_root"
+          available_kib="$(df -Pk "$avd_root" | awk 'END {print $4}')"
+          [[ "$available_kib" =~ ^[0-9]+$ ]] || { echo "::error::XDM_AVD_DISK_QUERY_FAILED"; exit 1; }
+          (( available_kib >= 4 * 1024 * 1024 )) || { echo "::error::XDM_AVD_DISK_INSUFFICIENT"; exit 1; }
       - name: Require KVM acceleration for Android instrumentation
         shell: bash
         run: |
@@ -185,14 +239,19 @@ jobs:
           sudo chmod 0666 /dev/kvm
           test -r /dev/kvm && test -w /dev/kvm
       - name: Signed release, instrumentation, install, upgrade, and reboot gate
-        uses: reactivecircus/android-emulator-runner@v2
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
         with:
-          api-level: 35
+          api-level: 36
+          target: google_apis
           arch: x86_64
           profile: pixel_6
+          cores: 2
+          ram-size: 2048M
+          disk-size: 3072M
           disable-animations: true
           disable-linux-hw-accel: false
-          script: cd app/XDM.Android && ./gradlew :app:connectedDebugAndroidTest && bash tools/run-xar16-signed-release-gate.sh --ci
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
+          script: bash app/XDM.Android/tools/run-hosted-emulator-instrumentation.sh --signed-release
       - name: Attest Android publication metadata
         uses: actions/attest@v4
         with:

@@ -103,6 +103,9 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version-file: engine/go.mod
+      - name: Provision SHA-256 pinned Windows ARM64 LLVM-MinGW compiler
+        shell: pwsh
+        run: ./app/XDM/eng/setup-windows-arm64-cgo.ps1
       - name: Windows ARM64 SQLite and Go C compiler preflight
         shell: pwsh
         run: |
