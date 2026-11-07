@@ -145,6 +145,14 @@ jobs:
           disable-linux-hw-accel: false
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
           script: bash app/XDM.Android/tools/run-hosted-emulator-instrumentation.sh --device
+      - name: Upload bounded hosted instrumentation crash evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xdm-hosted-instrumentation-evidence
+          path: ${{ runner.temp }}/xdm-instrumentation-evidence/
+          retention-days: 7
+          if-no-files-found: warn
 
   signed-release:
     if: startsWith(github.ref, 'refs/tags/android-v') && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.signed_release))
@@ -254,6 +262,14 @@ jobs:
           disable-linux-hw-accel: false
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
           script: bash app/XDM.Android/tools/run-hosted-emulator-instrumentation.sh --signed-release
+      - name: Upload bounded hosted release instrumentation crash evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xdm-hosted-release-instrumentation-evidence
+          path: ${{ runner.temp }}/xdm-instrumentation-evidence/
+          retention-days: 7
+          if-no-files-found: warn
       - name: Attest Android publication metadata
         uses: actions/attest@v4
         with:
