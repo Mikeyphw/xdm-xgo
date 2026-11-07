@@ -452,3 +452,6 @@ app/XDM.Android/media-ffmpeg/runtime/licenses/
 # Local backup files
 *.bak
 *.before-*
+
+# Google OIDC temporary credentials used only in GitHub Actions
+gha-creds-*.json
