@@ -10,6 +10,9 @@ on:
       - '.devtool.toml'
       - 'build-release-apk.sh'
       - '.github/workflows/android.yml'
+      - 'scripts/xgo_hf16_apk_pair.py'
+      - 'scripts/test_xgo_hf15_no_firebase.py'
+      - 'scripts/run_physical_arm64_instrumentation.sh'
   pull_request:
     paths:
       - 'app/XDM.Android/**'
@@ -19,30 +22,13 @@ on:
       - '.devtool.toml'
       - 'build-release-apk.sh'
       - '.github/workflows/android.yml'
+      - 'scripts/xgo_hf16_apk_pair.py'
+      - 'scripts/test_xgo_hf15_no_firebase.py'
+      - 'scripts/run_physical_arm64_instrumentation.sh'
   workflow_dispatch:
     inputs:
       signed_release:
         description: 'Authorize signing only for an android-v* release tag'
-        required: false
-        type: boolean
-        default: false
-      firebase_spark:
-        description: "Use one real ARM64 physical device via Spark (no-cost)"
-        required: false
-        type: boolean
-        default: false
-      model_id:
-        description: "Physical ARM64 Test Lab model ID from gcloud catalog"
-        required: false
-        type: string
-        default: ""
-      version_id:
-        description: "Android version supported by selected physical model"
-        required: false
-        type: string
-        default: "36"
-      confirm_spark:
-        description: "I verified this Firebase project is on the no-cost Spark plan"
         required: false
         type: boolean
         default: false
@@ -92,6 +78,23 @@ jobs:
         run: test -f gradle/wrapper/gradle-wrapper.jar || gradle wrapper --gradle-version 9.7.1
       - name: Post-DL03 final common validation
         run: bash tools/run-final-common-validation.sh
+      - name: Verify and stage one native ARM64 debug/instrumentation APK pair
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B scripts/xgo_hf16_apk_pair.py \
+            --sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" \
+            --app app/XDM.Android/app/build/outputs/apk/debug/app-debug.apk \
+            --test app/XDM.Android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
+            --out "$RUNNER_TEMP/xdm-apk-pair"
+      - name: Upload both APKs with one SHA256 source receipt (not device-tested)
+        uses: actions/upload-artifact@v4
+        with:
+          name: xdm-android-physical-arm64-apk-pair
+          path: ${{ runner.temp }}/xdm-apk-pair/
+          retention-days: 14
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: xdm-android-debug-artifacts
@@ -102,7 +105,6 @@ jobs:
           if-no-files-found: error
 
   instrumentation:
-    if: github.event_name != 'workflow_dispatch' || !inputs.firebase_spark
     needs: validate
     runs-on: ubuntu-24.04
     timeout-minutes: 60
@@ -304,124 +306,49 @@ jobs:
           path: app/XDM.Android/build/release/publication/**/*
           if-no-files-found: error
 
-  firebase-spark-arm64:
-    if: github.event_name == 'workflow_dispatch' && inputs.firebase_spark
-    concurrency:
-      group: xgo-firebase-spark-arm64-single-physical
-      cancel-in-progress: false
+  emulator-compatibility:
+    # Native ARM64 Go JNI instrumentation remains a distinct, unresolved gate.
+    # This is only an API36 x86_64 emulator environment/ADB smoke test.
+    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/android-v')
     needs: validate
     runs-on: ubuntu-24.04
-    timeout-minutes: 75
-    permissions:
-      contents: read
-      id-token: write
-    env:
-      XGO_FIREBASE_PROJECT_ID: ${{ vars.XGO_FIREBASE_PROJECT_ID }}
-      XGO_FIREBASE_WIF_PROVIDER: ${{ vars.XGO_FIREBASE_WIF_PROVIDER }}
-      XGO_FIREBASE_SERVICE_ACCOUNT: ${{ vars.XGO_FIREBASE_SERVICE_ACCOUNT }}
-      XGO_SPARK_MODEL: ${{ inputs.model_id }}
-      XGO_SPARK_VERSION: ${{ inputs.version_id }}
-      XGO_SPARK_CONFIRMED: ${{ inputs.confirm_spark }}
+    timeout-minutes: 40
     steps:
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
-      - name: Enforce manual single-device Spark-only admission
-        shell: bash
-        run: |
-          set -euo pipefail
-          [[ "$GITHUB_REPOSITORY" == 'Mikeyphw/xdm-xgo' ]] || { echo 'XGO_SPARK_REPO_REFUSED'; exit 2; }
-          [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]] || { echo 'XGO_SPARK_MANUAL_ONLY'; exit 2; }
-          [[ "$XGO_SPARK_CONFIRMED" == true ]] || { echo 'XGO_SPARK_NO_COST_PLAN_NOT_CONFIRMED'; exit 2; }
-          [[ "$XGO_FIREBASE_PROJECT_ID" =~ ^[a-z][a-z0-9-]{4,28}[a-z0-9]$ ]] || { echo 'XGO_SPARK_PROJECT_NOT_CONFIGURED'; exit 2; }
-          [[ "$XGO_FIREBASE_WIF_PROVIDER" =~ ^projects/[0-9]+/locations/global/workloadIdentityPools/[^/]+/providers/[^/]+$ ]] || { echo 'XGO_SPARK_WIF_NOT_CONFIGURED'; exit 2; }
-          [[ "$XGO_FIREBASE_SERVICE_ACCOUNT" == *'@'*'.iam.gserviceaccount.com' ]] || { echo 'XGO_SPARK_SERVICE_ACCOUNT_NOT_CONFIGURED'; exit 2; }
-          [[ "$XGO_SPARK_MODEL" =~ ^[A-Za-z0-9._-]{2,80}$ ]] || { echo 'XGO_SPARK_MODEL_ID_REFUSED'; exit 2; }
-          [[ "$XGO_SPARK_VERSION" =~ ^[0-9]{2,3}$ ]] || { echo 'XGO_SPARK_VERSION_ID_REFUSED'; exit 2; }
-          echo 'XGO_SPARK_ADMISSION_PASS: manual, one physical ARM64 device, Spark confirmed by requester'
+      - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
           java-version: '21'
-      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
         with:
           packages: 'platform-tools'
-      - name: Provision Android platform and pinned NDK
+      - name: Provision API36 x86_64 emulator runtime dependencies
         shell: bash
         run: |
           set -euo pipefail
-          sdkmanager --install 'platforms;android-36' 'build-tools;36.0.0' 'ndk;29.0.14206865'
-      - uses: gradle/actions/setup-gradle@v4
+          bash app/XDM.Android/tools/provision-hosted-emulator-runtime.sh --prepare
+          sdkmanager --install 'platforms;android-36' 'build-tools;36.0.0' 'emulator' 'system-images;android-36;google_apis;x86_64'
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?}}"
+          bash app/XDM.Android/tools/provision-hosted-emulator-runtime.sh --verify "$sdk_root"
+          test -d "$sdk_root/system-images/android-36/google_apis/x86_64"
+      - name: Require hardware KVM
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -c /dev/kvm || { echo 'XGO_COMPAT_KVM_MISSING'; exit 2; }
+          sudo chmod 0666 /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+      - name: API36 emulator infrastructure (NO native ARM64 test)
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
         with:
-          gradle-version: '9.7.1'
-      - name: Validate retained source and native release contracts
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 -B scripts/devtool_phase02_source_contract.py
-          python3 -B scripts/test_xgo_hf11_contracts.py
-          python3 -B scripts/test_xgo_hf12_emulator_provision.py
-          python3 -B scripts/test_xgo_hf13_crash_evidence.py
-          python3 -B app/XDM.Android/tools/validate-xar16-release-evidence-seal.py
-      - name: Build actual Android debug and instrumentation APKs (hosted only)
-        working-directory: app/XDM.Android
-        shell: bash
-        run: |
-          set -euo pipefail
-          chmod +x gradlew
-          ./gradlew --no-daemon --no-configuration-cache --max-workers=2 \
-            :app:assembleDebug :app:assembleDebugAndroidTest
-      - name: Require real packaged AArch64 Go JNI core and test APK
-        shell: bash
-        run: |
-          set -euo pipefail
-          python3 -B scripts/xgo_firebase_spark_arm64.py check-apks \
-            --app app/XDM.Android/app/build/outputs/apk/debug/app-debug.apk \
-            --test app/XDM.Android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk
-          mkdir -p "$RUNNER_TEMP/xgo-spark-evidence"
-          sha256sum app/XDM.Android/app/build/outputs/apk/debug/app-debug.apk \
-            app/XDM.Android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
-            > "$RUNNER_TEMP/xgo-spark-evidence/apks.sha256"
-      - name: Authenticate only after the long Android build (OIDC)
-        uses: google-github-actions/auth@7c6bc770dae815cd3e89ee6cdf493a5fab2cc093 # v3.0.0
-        with:
-          project_id: ${{ env.XGO_FIREBASE_PROJECT_ID }}
-          workload_identity_provider: ${{ env.XGO_FIREBASE_WIF_PROVIDER }}
-          service_account: ${{ env.XGO_FIREBASE_SERVICE_ACCOUNT }}
-      - uses: google-github-actions/setup-gcloud@aa5489c8933f4cc7a4f7d45035b3b1440c9c10db # v3.0.1
-        with:
-          version: '>= 520.0.0'
-          project_id: ${{ env.XGO_FIREBASE_PROJECT_ID }}
-      - name: Verify requested model is a real, supported ARM64 device (no quota spent)
-        shell: bash
-        run: |
-          set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/xgo-spark-evidence"
-          gcloud firebase test android models describe "$XGO_SPARK_MODEL" \
-            --project "$XGO_FIREBASE_PROJECT_ID" --format=json \
-            > "$RUNNER_TEMP/xgo-spark-evidence/catalog-model.json"
-          python3 -B scripts/xgo_firebase_spark_arm64.py check-model \
-            --catalog-json "$RUNNER_TEMP/xgo-spark-evidence/catalog-model.json" \
-            --model-id "$XGO_SPARK_MODEL" --version-id "$XGO_SPARK_VERSION"
-      - name: Run one real ARM64 physical device instrumentation matrix
-        shell: bash
-        run: |
-          set -euo pipefail
-          gcloud firebase test android run \
-            --project "$XGO_FIREBASE_PROJECT_ID" \
-            --type instrumentation \
-            --app app/XDM.Android/app/build/outputs/apk/debug/app-debug.apk \
-            --test app/XDM.Android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
-            --device "model=${XGO_SPARK_MODEL},version=${XGO_SPARK_VERSION},locale=en,orientation=portrait" \
-            --timeout 15m \
-            --no-auto-google-login \
-            --num-flaky-test-attempts=0 \
-            --client-details "matrixLabel=XGO-Spark-ARM64-${GITHUB_RUN_ID}" \
-            2>&1 | tee "$RUNNER_TEMP/xgo-spark-evidence/testlab-summary.txt"
-          echo 'XGO_FIREBASE_SPARK_REAL_ARM64_INSTRUMENTATION_PASS'
-      - name: Upload bounded acceptance receipt (not a passing result if tests failed)
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: xgo-firebase-spark-arm64-acceptance-evidence
-          path: ${{ runner.temp }}/xgo-spark-evidence/
-          retention-days: 7
-          if-no-files-found: warn
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          cores: 2
+          ram-size: 2048M
+          disk-size: 3072M
+          disable-animations: true
+          disable-linux-hw-accel: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
+          script: bash app/XDM.Android/tools/run-hosted-emulator-compatibility.sh

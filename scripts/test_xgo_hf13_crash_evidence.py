@@ -27,7 +27,7 @@ class HF13Tests(unittest.TestCase):
 
     def test_each_job_keeps_real_emulator_and_uploads_evidence(self):
         wf=WF.read_text()
-        self.assertEqual(wf.count('ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d'),2)
+        self.assertEqual(wf.count('ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d'),3)
         for name in ('instrumentation','signed-release'):
             section=wf.split('\n  '+name+':\n',1)[1]
             if name=='instrumentation':section=section.split('\n  signed-release:\n',1)[0]
