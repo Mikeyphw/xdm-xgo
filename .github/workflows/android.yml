@@ -19,6 +19,7 @@ on:
       - 'scripts/test_xgo_hf15_no_firebase.py'
       - 'scripts/run_physical_arm64_instrumentation.sh'
       - 'scripts/test_xgo_emulator_persistence_ci.py'
+      - 'scripts/test_xgo_xp02b_browser_emulator_ci.py'
   pull_request:
     paths:
       - 'app/XDM.Android/**'
@@ -35,6 +36,7 @@ on:
       - 'scripts/test_xgo_hf15_no_firebase.py'
       - 'scripts/run_physical_arm64_instrumentation.sh'
       - 'scripts/test_xgo_emulator_persistence_ci.py'
+      - 'scripts/test_xgo_xp02b_browser_emulator_ci.py'
   workflow_dispatch:
     inputs:
       arm64_translation_diagnostic:
@@ -109,6 +111,9 @@ jobs:
       - name: XP02 emulator-persistence CI source and receipt regressions
         working-directory: .
         run: python3 -B scripts/test_xgo_emulator_persistence_ci.py
+      - name: XP02B browser-scheme Android emulator contract regressions
+        working-directory: .
+        run: python3 -B scripts/test_xgo_xp02b_browser_emulator_ci.py
       - name: Post-DL03 final common validation
         run: bash tools/run-final-common-validation.sh
       - name: Verify pinned FFmpeg and FFprobe in the debug APK (source attestation and 16 KiB)
@@ -347,7 +352,7 @@ jobs:
 
   emulator-compatibility:
     # Native ARM64 Go JNI instrumentation remains a distinct, unresolved gate.
-    # API36 x86_64 Android persistence instrumentation, without ARM64 native execution.
+    # API36 x86_64 Android persistence and browser-intake instrumentation; no native ARM64 execution.
     if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/android-v')
     needs: validate
     runs-on: ubuntu-24.04
@@ -394,6 +399,17 @@ jobs:
           disable-linux-hw-accel: false
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
           script: bash app/XDM.Android/tools/run-hosted-emulator-compatibility.sh
+      - name: Upload XP02B browser-intake emulator test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xdm-emulator-browser-intake-test-results
+          path: |
+            app/XDM.Android/browser-integration/build/outputs/androidTest-results/connected/
+            app/XDM.Android/browser-integration/build/reports/androidTests/connected/
+            ${{ runner.temp }}/xdm-emulator-browser/receipt.json
+          retention-days: 7
+          if-no-files-found: warn
       - name: Upload bounded emulator persistence test evidence
         if: always()
         uses: actions/upload-artifact@v4

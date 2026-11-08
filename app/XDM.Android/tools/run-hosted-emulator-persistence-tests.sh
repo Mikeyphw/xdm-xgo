@@ -22,3 +22,11 @@ python3 -B tools/verify-hosted-emulator-persistence-results.py \
   --results-dir persistence/build/outputs/androidTest-results/connected \
   --receipt "${RUNNER_TEMP:?}/xdm-emulator-persistence/receipt.json"
 echo 'XGO_XP02_EMULATOR_PERSISTENCE_PASS: x86_64/API36 Room instrumentation (not native ARM64)'
+# XP02B: isolated production browser parser / Android Intent transport. This is a
+# library androidTest, not :app, and never packages or executes ARM64 engines.
+rm -rf browser-integration/build/outputs/androidTest-results/connected
+gradle --no-daemon --console=plain -Dorg.gradle.parallel=false :browser-integration:connectedDebugAndroidTest
+python3 -B tools/verify-hosted-emulator-browser-results.py \
+  --results-dir browser-integration/build/outputs/androidTest-results/connected \
+  --receipt "${RUNNER_TEMP:?}/xdm-emulator-browser/receipt.json"
+echo 'XGO_XP02B_EMULATOR_BROWSER_PASS: production deep-link parser and Android Uri/Intent transport (no ARM64)'
