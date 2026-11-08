@@ -83,8 +83,26 @@ for token in ("buildXdmCapture", "buildCaptureSession", 'params.set("url", url)'
     need(handoff, token, "direct-v3 extension handoff")
 for token in ('params.set("ct"', 'params.set("ek"', 'params.set("iv"', "crypto.subtle"):
     forbid(handoff, token, "new direct-v3 extension handoff")
-for token in ("visibleCandidateSnapshot(tabId, MAX_CANDIDATES_PER_TAB)", "visibleCandidates.slice(0, MAX_HANDOFF_CANDIDATES)", "buildCaptureSession", "prebuiltXdmLink", "capturedCandidateCount"):
-    need(network, token, "session-aware evidence-gated background dispatch")
+# XP01 v1.6.1: discovery must display the single-choice picker, never prebuild
+# a potentially sensitive capture URI or submit multiple items automatically.
+for token in (
+    "visibleCandidateSnapshot(tabId, MAX_CANDIDATES_PER_TAB)",
+    'const chooserRequired = true;',
+    'const prebuiltXdmLink = "";',
+    'const prebuiltOneDmLink = "";',
+    "const capturedCandidateCount = 0;",
+    "function requireSingleSelectedCandidate(tabId, requestedIds, targetLabel)",
+    "if (ids.length !== 1)",
+    "if (selected.length !== 1)",
+    'const selected = requireSingleSelectedCandidate(tabId, requestedIds, "XDM");',
+    'const selected = requireSingleSelectedCandidate(tabId, requestedIds, "1DM+");',
+    "candidates: [candidate]",
+    "totalCandidateCount: 1",
+    "truncated: false",
+    "buildCaptureSession",
+):
+    need(network, token, "single-choice evidence-gated background dispatch")
+forbid(network, "visibleCandidates.slice(0, MAX_HANDOFF_CANDIDATES)", "retired multi-candidate automatic handoff")
 need(network, "candidateStore.snapshot(tabId, MAX_CANDIDATES_PER_TAB)", "internal correlation evidence retention")
 need(frame, "prebuiltXdmLink: input.prebuiltXdmLink", "prebuilt direct-v3 link propagation")
 

@@ -100,7 +100,14 @@ assert.strictEqual(events.message.listeners.length, 1, "page observation receive
   assert.ok(diagnostics && diagnostics["7"]);
   assert.strictEqual(diagnostics["7"].reason, "xhr-media-mime");
   assert.strictEqual(diagnostics["7"].frameCount, 1);
-  assert.ok(handoffInputs.length > 0);
+  assert.strictEqual(handoffInputs.length, 0, "network detection must not build an unselected capture session");
+  const firstChooser = await events.message.listeners[0]({ type: "xdmGetLogicalCandidatesV2", tabId: 7 }, {});
+  assert.ok(firstChooser.candidates.length > 0, "picker must expose privileged request evidence");
+  const firstId = firstChooser.candidates[0].logicalMediaId;
+  const firstSend = await events.message.listeners[0]({ type: "xdmSendLogicalCandidatesV2", tabId: 7, logicalMediaIds: [firstId] }, {});
+  assert.strictEqual(firstSend.ok, true, firstSend.error || "selected handoff failed");
+  assert.strictEqual(handoffInputs.length, 1, "one explicit selection produces exactly one handoff");
+  assert.strictEqual(handoffInputs[0].candidates.length, 1);
   assert.strictEqual(handoffInputs[0].candidates[0].headers["accept-language"], undefined, "proposed headers must not become executable without final sent-header evidence");
   assert.strictEqual(handoffInputs[0].candidates[0].browserHandoff.proposedHeaders.headers["accept-language"], "en-GB,en;q=0.9", "Accept-Language remains available as proposed audit context");
 
@@ -186,6 +193,10 @@ assert.strictEqual(events.message.listeners.length, 1, "page observation receive
     }
   }, { tab: { id: 12, url: "https://page.example/watch/12", title: "Example video 12" }, frameId: 0, url: "https://page.example/watch/12" });
   await new Promise(resolve => setTimeout(resolve, 700));
+  const chooser12 = await messageListener({ type: "xdmGetLogicalCandidatesV2", tabId: 12 }, {});
+  assert.ok(chooser12.candidates.length > 0, "playback-enriched media must be selectable");
+  const selection12 = await messageListener({ type: "xdmSendLogicalCandidatesV2", tabId: 12, logicalMediaIds: [chooser12.candidates[0].logicalMediaId] }, {});
+  assert.strictEqual(selection12.ok, true, selection12.error || "selected playback send failed");
   const metadataHandoff = handoffInputs.slice().reverse().find(input => input.pageUrl === "https://page.example/watch/12");
   assert.ok(metadataHandoff, "playback-enriched candidate must build a browser capture session");
   assert.strictEqual(metadataHandoff.candidates[0].durationMs, 321000, "playback duration must survive privileged candidate merge");
@@ -230,6 +241,10 @@ assert.strictEqual(events.message.listeners.length, 1, "page observation receive
   diagnostics = storageState.xdmNetworkDiagnosticsV1;
   assert.strictEqual(diagnostics["11"].reason, "hls-body");
   assert.strictEqual(diagnostics["11"].quality, "strong");
+  const chooser11 = await messageListener({ type: "xdmGetLogicalCandidatesV2", tabId: 11 }, {});
+  assert.ok(chooser11.candidates.length > 0, "promoted HLS media must be selectable");
+  const selection11 = await messageListener({ type: "xdmSendLogicalCandidatesV2", tabId: 11, logicalMediaIds: [chooser11.candidates[0].logicalMediaId] }, {});
+  assert.strictEqual(selection11.ok, true, selection11.error || "selected HLS send failed");
   const tab11Handoff = handoffInputs.slice().reverse().find(input => input.pageUrl === "https://page.example/watch/11");
   assert.ok(tab11Handoff && tab11Handoff.candidates[0].browserHandoff.proposedHeaders.headers["accept-language"] === "pt-BR", "Accept-Language must survive privileged request capture");
 
@@ -271,6 +286,10 @@ assert.strictEqual(events.message.listeners.length, 1, "page observation receive
 
   const beforeChooserLaunch = executeCalls.length;
   const chosenId = chooser.candidates[0].logicalMediaId;
+  const multiSelection = await messageListener({ type: "xdmSendLogicalCandidatesV2", tabId: tab20, logicalMediaIds: [chosenId, "forged-second-id"] }, {});
+  assert.strictEqual(multiSelection.ok, false, "Multi-select must be rejected");
+  assert.match(multiSelection.error, /exactly one/i);
+  assert.strictEqual(executeCalls.length, beforeChooserLaunch, "rejected multi-select must never launch a native link");
   const sendResult = await messageListener({ type: "xdmSendLogicalCandidatesV2", tabId: tab20, logicalMediaIds: [chosenId] }, {});
   assert.strictEqual(sendResult.ok, true);
   assert.strictEqual(sendResult.sentCount, 1);

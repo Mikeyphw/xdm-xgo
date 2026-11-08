@@ -143,6 +143,37 @@ class XpiReferenceParity(unittest.TestCase):
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
 
 
+    def test_runtime_foundation_gate_enforces_v161_one_selected_item(self):
+        gate=(ROOT/'app/XDM.Android/tools/validate-runtime-foundation-phase59-61.py').read_text()
+        network=(SRC/'network-observer.js').read_text()
+        fab=(SRC/'fab.js').read_text()
+        for needle in [
+            'const chooserRequired = true;',
+            'const prebuiltXdmLink = "";',
+            'const prebuiltOneDmLink = "";',
+            'const capturedCandidateCount = 0;',
+            'function requireSingleSelectedCandidate(tabId, requestedIds, targetLabel)',
+            'if (ids.length !== 1)',
+            'if (selected.length !== 1)',
+            'candidates: [candidate]',
+            'totalCandidateCount: 1',
+            'truncated: false',
+        ]:
+            self.assertIn(needle,gate)
+            self.assertIn(needle,network)
+        self.assertNotIn('visibleCandidates.slice(0, MAX_HANDOFF_CANDIDATES)',network)
+        self.assertIn('retired multi-candidate automatic handoff',gate)
+        self.assertIn('shadow = host.attachShadow({ mode: "closed" });',fab)
+        fab_test=(MODULE/'tests/test_fab.js').read_text()
+        background_test=(MODULE/'tests/test_background.js').read_text()
+        frame_test=(MODULE/'tests/test_phase43a_bridge.js').read_text()
+        self.assertIn('single-choice picker tests passed',fab_test)
+        self.assertIn('network detection must not build an unselected capture session',background_test)
+        self.assertIn('Multi-select must be rejected',background_test)
+        self.assertIn('pickerRequired: true',frame_test)
+        result=subprocess.run([sys.executable,'-B',str(ROOT/'app/XDM.Android/tools/validate-runtime-foundation-phase59-61.py')],cwd=ROOT/'app/XDM.Android',capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stdout+"\n"+result.stderr)
+
     def test_release_boundary_is_unchanged(self):
         w=(ROOT/'.github/workflows/android.yml').read_text()
         self.assertEqual(sha(release_block(w).encode()),SIGNED_RELEASE_SHA)
