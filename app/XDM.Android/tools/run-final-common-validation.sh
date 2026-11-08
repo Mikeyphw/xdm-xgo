@@ -17,7 +17,7 @@ if [[ "${GITHUB_ACTIONS:-}" == "true" ]]; then
     "-Dorg.gradle.jvmargs=-Xmx2048m -XX:MaxMetaspaceSize=1536m -XX:ReservedCodeCacheSize=256m -XX:+UseCodeCacheFlushing -Dfile.encoding=UTF-8 -XX:ActiveProcessorCount=2"
   )
 fi
-./gradlew -Pxdm.requireAria2Runtime=true \
+./gradlew -Pxdm.requireAria2Runtime=true -Pxdm.requireFfmpegRuntime=true \
   "${ci_gradle_args[@]}" \
   :app:finalRemediationStaticGate \
   :app:compileDebugKotlin \

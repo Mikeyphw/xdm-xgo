@@ -15,6 +15,7 @@ on:
       - 'scripts/xgo_hf16_apk_pair.py'
       - 'scripts/test_xgo_hf16_apk_pair.py'
       - 'scripts/test_xgo_hf18_ci_dispatch.py'
+      - 'scripts/test_xgo_hf19_arm64_runtime_gate.py'
       - 'scripts/test_xgo_hf15_no_firebase.py'
       - 'scripts/run_physical_arm64_instrumentation.sh'
   pull_request:
@@ -29,6 +30,7 @@ on:
       - 'scripts/xgo_hf16_apk_pair.py'
       - 'scripts/test_xgo_hf16_apk_pair.py'
       - 'scripts/test_xgo_hf18_ci_dispatch.py'
+      - 'scripts/test_xgo_hf19_arm64_runtime_gate.py'
       - 'scripts/test_xgo_hf15_no_firebase.py'
       - 'scripts/run_physical_arm64_instrumentation.sh'
   workflow_dispatch:
@@ -53,7 +55,7 @@ env:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     defaults:
       run:
         working-directory: app/XDM.Android
@@ -93,8 +95,14 @@ jobs:
       - name: HF18 CI dispatch and release boundary regressions
         working-directory: .
         run: python3 -B scripts/test_xgo_hf18_ci_dispatch.py
+      - name: HF19 ARM64 native payload gate regressions
+        working-directory: .
+        run: python3 -B scripts/test_xgo_hf19_arm64_runtime_gate.py
       - name: Post-DL03 final common validation
         run: bash tools/run-final-common-validation.sh
+      - name: Verify pinned FFmpeg and FFprobe in the debug APK (source attestation and 16 KiB)
+        working-directory: app/XDM.Android
+        run: python3 tools/verify-ffmpeg-runtime.py --require-payload --require-16kb-alignment --apk app/build/outputs/apk/debug/app-debug.apk
       - name: Verify and stage one native ARM64 debug/instrumentation APK pair
         working-directory: .
         shell: bash
