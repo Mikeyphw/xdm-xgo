@@ -18,6 +18,7 @@ on:
       - 'scripts/test_xgo_hf19_arm64_runtime_gate.py'
       - 'scripts/test_xgo_hf15_no_firebase.py'
       - 'scripts/run_physical_arm64_instrumentation.sh'
+      - 'scripts/test_xgo_emulator_persistence_ci.py'
   pull_request:
     paths:
       - 'app/XDM.Android/**'
@@ -33,6 +34,7 @@ on:
       - 'scripts/test_xgo_hf19_arm64_runtime_gate.py'
       - 'scripts/test_xgo_hf15_no_firebase.py'
       - 'scripts/run_physical_arm64_instrumentation.sh'
+      - 'scripts/test_xgo_emulator_persistence_ci.py'
   workflow_dispatch:
     inputs:
       arm64_translation_diagnostic:
@@ -104,6 +106,9 @@ jobs:
       - name: XP01 XPI v1.6.1 authored parity gate
         working-directory: .
         run: python3 -B scripts/test_xgo_xpi_v161_parity.py
+      - name: XP02 emulator-persistence CI source and receipt regressions
+        working-directory: .
+        run: python3 -B scripts/test_xgo_emulator_persistence_ci.py
       - name: Post-DL03 final common validation
         run: bash tools/run-final-common-validation.sh
       - name: Verify pinned FFmpeg and FFprobe in the debug APK (source attestation and 16 KiB)
@@ -342,11 +347,11 @@ jobs:
 
   emulator-compatibility:
     # Native ARM64 Go JNI instrumentation remains a distinct, unresolved gate.
-    # This is only an API36 x86_64 emulator environment/ADB smoke test.
+    # API36 x86_64 Android persistence instrumentation, without ARM64 native execution.
     if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/android-v')
     needs: validate
     runs-on: ubuntu-24.04
-    timeout-minutes: 40
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v4
@@ -365,6 +370,9 @@ jobs:
           sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?}}"
           bash app/XDM.Android/tools/provision-hosted-emulator-runtime.sh --verify "$sdk_root"
           test -d "$sdk_root/system-images/android-36/google_apis/x86_64"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.7.1'
       - name: Require hardware KVM
         shell: bash
         run: |
@@ -372,7 +380,7 @@ jobs:
           test -c /dev/kvm || { echo 'XGO_COMPAT_KVM_MISSING'; exit 2; }
           sudo chmod 0666 /dev/kvm
           test -r /dev/kvm && test -w /dev/kvm
-      - name: API36 emulator infrastructure (NO native ARM64 test)
+      - name: API36 emulator and persistence instrumentation (NO native ARM64 test)
         uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
         with:
           api-level: 36
@@ -386,3 +394,14 @@ jobs:
           disable-linux-hw-accel: false
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
           script: bash app/XDM.Android/tools/run-hosted-emulator-compatibility.sh
+      - name: Upload bounded emulator persistence test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xdm-emulator-persistence-test-results
+          path: |
+            app/XDM.Android/persistence/build/outputs/androidTest-results/connected/
+            app/XDM.Android/persistence/build/reports/androidTests/connected/
+            ${{ runner.temp }}/xdm-emulator-persistence/receipt.json
+          retention-days: 7
+          if-no-files-found: warn
