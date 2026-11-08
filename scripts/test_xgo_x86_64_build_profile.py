@@ -1,0 +1,125 @@
+#!/usr/bin/env python3
+"""Native-free XP03 x86_64 profile/ELF/CI source and refusal regression tests."""
+from __future__ import annotations
+import importlib.util
+import pathlib
+import struct
+import tempfile
+import unittest
+import zipfile
+
+ROOT = pathlib.Path(__file__).resolve().parents[1]
+
+
+def load(path: str, name: str):
+    spec = importlib.util.spec_from_file_location(name, ROOT / path)
+    assert spec and spec.loader
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class X86SourceAndIntegrity(unittest.TestCase):
+    def test_profile_patches_only_five_exact_abi_inputs(self):
+        p = load('scripts/xgo_x86_64_profile.py', 'profile_x86')
+        fixture = '\n'.join(before for before, _ in p.PAIRS)
+        replaced = p.transform(fixture)
+        for old, new in p.PAIRS:
+            if old not in new:
+                self.assertNotIn(old, replaced)
+            self.assertIn(new, replaced)
+        self.assertEqual(len(p.PAIRS), 5)
+        self.assertRaisesRegex(ValueError, 'ANCHOR_MISMATCH', p.transform, fixture.replace('arm64-v8a', 'x86_64'))
+        self.assertRaisesRegex(ValueError, 'ANCHOR_MISMATCH', p.transform, fixture + '\n' + p.PAIRS[0][0])
+
+    def test_real_android_gradle_anchors_remain_pinned(self):
+        p = load('scripts/xgo_x86_64_profile.py', 'profile_real')
+        gradle = ROOT / 'app/XDM.Android/app/build.gradle.kts'
+        if gradle.is_file():
+            self.assertEqual(gradle.read_text().count('abiFilters += setOf("arm64-v8a")'), 1)
+            p.transform(gradle.read_text())
+        self.assertEqual(len(p.BASE_BLOB), 40)
+        self.assertIn('androidTestImplementation(libs.androidx.test.runner)', p.transform('\n'.join(before for before, _ in p.PAIRS)))
+        self.assertIn('XGO_X86_PROFILE_CI_ONLY', (ROOT / 'scripts/xgo_x86_64_profile.py').read_text())
+        self.assertNotIn('git reset --hard', (ROOT / 'scripts/xgo_x86_64_profile.py').read_text())
+
+    def test_workflow_preserves_prior_gates_and_executes_runtime_only_on_manual_opt_in(self):
+        s = (ROOT / '.github/workflows/android.yml').read_text()
+        self.assertIn('x86_64-app-runtime:', s)
+        app_job = s.split('\n  x86_64-app-runtime:\n', 1)[1]
+        self.assertIn("if: github.event_name == 'workflow_dispatch' && inputs.x86_64_native_test == true", app_job)
+        self.assertIn('x86_64_native_test:', s)
+        self.assertIn("default: false", s.split('x86_64_native_test:', 1)[1].split('permissions:', 1)[0])
+        self.assertNotIn('if: github.event_name != \'push\'', app_job)
+        self.assertIn('go-version-file: engine/go.mod', s)
+        self.assertIn('ndk;${XDM_ANDROID_NDK_VERSION}', s)
+        self.assertIn('scripts/run_xgo_x86_64_emulator.sh', s)
+        self.assertIn('xdm-android-x86_64-apk-and-jni-evidence', s)
+        self.assertIn('name: XGO X86 x86_64 APK build-profile regressions', s)
+        self.assertIn('emulator-compatibility:', s)
+        self.assertIn('xdm-emulator-browser-intake-test-results', s)
+        self.assertIn('xdm-emulator-persistence-test-results', s)
+        self.assertIn('run_physical_arm64_instrumentation.sh', s)
+
+    def test_x86_builder_declares_real_ndk_and_no_fallback_arch(self):
+        b=load('tools/xgo/build_android_xdmcore_x86_64.py', 'x86builder')
+        self.assertEqual(b.GOARCH, 'amd64')
+        self.assertEqual(b.ABI, 'x86_64')
+        self.assertEqual(b.NDK_VERSION, '29.0.14206865')
+        self.assertEqual(b.API, 26)
+        self.assertIn('jniLibs/x86_64/libxdmcore.so', str(b.OUTPUT))
+        self.assertEqual(len(b.EXPECTED_JNI), 7)
+        self.assertNotIn('libndk_translation', (ROOT / 'tools/xgo/build_android_xdmcore_x86_64.py').read_text())
+
+    def test_x86_elf_refuses_wrong_machine_and_alignment(self):
+        b=load('tools/xgo/build_android_xdmcore_x86_64.py', 'x86elf')
+        elf=bytearray(256)
+        elf[:6]=b'\x7fELF\x02\x01'
+        struct.pack_into('<HH',elf,16,3,183)
+        struct.pack_into('<Q',elf,32,64)
+        struct.pack_into('<HH',elf,54,56,1)
+        struct.pack_into('<I',elf,64,1)
+        struct.pack_into('<Q',elf,64+48,16384)
+        with tempfile.TemporaryDirectory() as td:
+            p=pathlib.Path(td)/'core.so'
+            p.write_bytes(elf)
+            with self.assertRaisesRegex(RuntimeError,'WRONG_ELF'):
+                b.verify_elf(p)
+            struct.pack_into('<HH',elf,16,3,62)
+            struct.pack_into('<Q',elf,64+48,4096)
+            p.write_bytes(elf)
+            with self.assertRaisesRegex(RuntimeError,'LOAD_ALIGNMENT'):
+                b.verify_elf(p)
+
+    def test_apk_refuses_arm64_and_missing_x86_core(self):
+        v=load('scripts/verify_xgo_x86_apk.py', 'x86apk')
+        with tempfile.TemporaryDirectory() as td:
+            path=pathlib.Path(td)/'bad.apk'
+            with zipfile.ZipFile(path,'w') as z:
+                z.writestr('lib/arm64-v8a/libxdmcore.so','invalid')
+            with self.assertRaisesRegex(ValueError,'NON_X86'):
+                v.inspect(path)
+            with zipfile.ZipFile(path,'w') as z:
+                z.writestr('lib/x86_64/libother.so','invalid')
+            with self.assertRaisesRegex(ValueError,'CORE_MISSING'):
+                v.inspect(path)
+            with zipfile.ZipFile(path,'w') as z:
+                z.writestr('lib/x86_64/libxdmcore.so',b'fake_core')
+            core=pathlib.Path(td)/'core.so';core.write_bytes(b'different_core')
+            with self.assertRaisesRegex(ValueError,'CORE_SOURCE_MISMATCH'):
+                v.inspect(path,core)
+
+    def test_smoke_exercises_actual_jni_and_launch(self):
+        smoke=(ROOT/'app/XDM.Android/app/src/androidTest/kotlin/com/mikeyphw/xdm/android/XgoX86JniSmokeTest.kt').read_text()
+        runner=(ROOT/'scripts/run_xgo_x86_64_emulator.sh').read_text()
+        self.assertIn('JniNativeXdmCore.create',smoke)
+        self.assertIn('assertEquals("x86_64", Build.SUPPORTED_ABIS.first())',smoke)
+        self.assertIn('am instrument -w -r',runner)
+        self.assertIn('am start -W',runner)
+        self.assertIn('verify_xgo_x86_apk.py',runner)
+        self.assertIn('--core app/src/main/jniLibs/x86_64/libxdmcore.so',runner)
+        self.assertIn('XGO_X86_EMULATOR_APP_JNI_PASS',runner)
+
+
+if __name__ == '__main__':
+    unittest.main(verbosity=2)
