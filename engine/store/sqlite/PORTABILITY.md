@@ -13,11 +13,11 @@ the final Go/cgo link, while XGO's own binding continues to call the stable
 Android hidden/private SQLite symbols, and does not require a separately
 packaged `libsqlite3.so`.
 
-Other hosts retain their existing external SQLite linkage contract:
+Linux and macOS retain their existing external SQLite linkage contracts. Windows embeds SQLite just as Android does:
 
 - Linux: system or application-packaged `libsqlite3`.
 - macOS: system or application-packaged SQLite according to release policy.
-- Windows: application-packaged SQLite import library/DLL.
+- Windows: embedded `github.com/mattn/go-sqlite3` amalgamation, without an external SQLite DLL or import library.
 
 The Android native builder verifies that `libxdmcore.so` has no dynamic
 `libsqlite3.so` dependency before it is accepted for application packaging.

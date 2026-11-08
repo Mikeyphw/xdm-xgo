@@ -2,18 +2,49 @@ name: XDM Android CI
 
 on:
   push:
+    branches: [main]
+    tags: ['android-v*']
     paths:
       - 'app/XDM.Android/**'
+      - 'engine/**'
+      - 'go.work'
+      - 'tools/xgo/**'
       - '.devtool.toml'
       - 'build-release-apk.sh'
       - '.github/workflows/android.yml'
+      - 'scripts/xgo_hf16_apk_pair.py'
+      - 'scripts/test_xgo_hf16_apk_pair.py'
+      - 'scripts/test_xgo_hf18_ci_dispatch.py'
+      - 'scripts/test_xgo_hf19_arm64_runtime_gate.py'
+      - 'scripts/test_xgo_hf15_no_firebase.py'
+      - 'scripts/run_physical_arm64_instrumentation.sh'
   pull_request:
     paths:
       - 'app/XDM.Android/**'
+      - 'engine/**'
+      - 'go.work'
+      - 'tools/xgo/**'
       - '.devtool.toml'
       - 'build-release-apk.sh'
       - '.github/workflows/android.yml'
+      - 'scripts/xgo_hf16_apk_pair.py'
+      - 'scripts/test_xgo_hf16_apk_pair.py'
+      - 'scripts/test_xgo_hf18_ci_dispatch.py'
+      - 'scripts/test_xgo_hf19_arm64_runtime_gate.py'
+      - 'scripts/test_xgo_hf15_no_firebase.py'
+      - 'scripts/run_physical_arm64_instrumentation.sh'
   workflow_dispatch:
+    inputs:
+      arm64_translation_diagnostic:
+        description: 'Manual ARM64-on-x86 crash diagnostics ONLY (not device acceptance)'
+        required: false
+        type: boolean
+        default: false
+      signed_release:
+        description: 'Authorize signing only for an android-v* release tag'
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -24,7 +55,7 @@ env:
 jobs:
   validate:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 120
     defaults:
       run:
         working-directory: app/XDM.Android
@@ -34,7 +65,9 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
+        with:
+          packages: 'platform-tools'
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -56,8 +89,37 @@ jobs:
           bash tools/run-final-release-gate.sh --ci
       - name: Bootstrap wrapper
         run: test -f gradle/wrapper/gradle-wrapper.jar || gradle wrapper --gradle-version 9.7.1
+      - name: HF17 offline APK pair regressions
+        working-directory: .
+        run: python3 -B scripts/test_xgo_hf16_apk_pair.py
+      - name: HF18 CI dispatch and release boundary regressions
+        working-directory: .
+        run: python3 -B scripts/test_xgo_hf18_ci_dispatch.py
+      - name: HF19 ARM64 native payload gate regressions
+        working-directory: .
+        run: python3 -B scripts/test_xgo_hf19_arm64_runtime_gate.py
       - name: Post-DL03 final common validation
         run: bash tools/run-final-common-validation.sh
+      - name: Verify pinned FFmpeg and FFprobe in the debug APK (source attestation and 16 KiB)
+        working-directory: app/XDM.Android
+        run: python3 tools/verify-ffmpeg-runtime.py --require-payload --require-16kb-alignment --apk app/build/outputs/apk/debug/app-debug.apk
+      - name: Verify and stage one native ARM64 debug/instrumentation APK pair
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B scripts/xgo_hf16_apk_pair.py \
+            --sha "$GITHUB_SHA" --run-id "$GITHUB_RUN_ID" \
+            --app app/XDM.Android/app/build/outputs/apk/debug/app-debug.apk \
+            --test app/XDM.Android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
+            --out "$RUNNER_TEMP/xdm-apk-pair"
+      - name: Upload both APKs with one SHA256 source receipt (not device-tested)
+        uses: actions/upload-artifact@v4
+        with:
+          name: xdm-android-physical-arm64-apk-pair
+          path: ${{ runner.temp }}/xdm-apk-pair/
+          retention-days: 14
+          if-no-files-found: error
       - uses: actions/upload-artifact@v4
         with:
           name: xdm-android-debug-artifacts
@@ -68,8 +130,11 @@ jobs:
           if-no-files-found: error
 
   instrumentation:
+    # The ARM64 JNI Go core SIGILLs under x86_64 libndk_translation (cpu.getMIDR).
+    # Manual crash diagnostics only; physical native testing is separate.
+    if: github.event_name == 'workflow_dispatch' && inputs.arm64_translation_diagnostic
     needs: validate
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
@@ -77,21 +142,72 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
+        with:
+          packages: 'platform-tools'
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.7.1'
+      - name: Provision Cinderbox-proven API36 Google APIs image
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash app/XDM.Android/tools/provision-hosted-emulator-runtime.sh --prepare
+          sdkmanager --install 'platforms;android-36' 'build-tools;36.0.0'
+          for attempt in 1 2 3; do
+            if sdkmanager --install 'emulator' 'system-images;android-36;google_apis;x86_64'; then
+              break
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              echo "::error::XDM_API36_IMAGE_INSTALL_FAILED"
+              exit 1
+            fi
+            sleep 10
+          done
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?}}"
+          bash app/XDM.Android/tools/provision-hosted-emulator-runtime.sh --verify "$sdk_root"
+          test -d "$sdk_root/system-images/android-36/google_apis/x86_64"
+          avd_root="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
+          mkdir -p "$avd_root"
+          available_kib="$(df -Pk "$avd_root" | awk 'END {print $4}')"
+          [[ "$available_kib" =~ ^[0-9]+$ ]] || { echo "::error::XDM_AVD_DISK_QUERY_FAILED"; exit 1; }
+          (( available_kib >= 4 * 1024 * 1024 )) || { echo "::error::XDM_AVD_DISK_INSUFFICIENT"; exit 1; }
+      - name: Require KVM acceleration for Android instrumentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -c /dev/kvm ]]; then
+            echo "::error::/dev/kvm is unavailable; refusing unaccelerated Android instrumentation"
+            exit 1
+          fi
+          sudo chmod 0666 /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
       - name: Android instrumentation matrix
-        uses: reactivecircus/android-emulator-runner@v2
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
         with:
-          api-level: 35
+          api-level: 36
+          target: google_apis
           arch: x86_64
           profile: pixel_6
+          cores: 2
+          ram-size: 2048M
+          disk-size: 3072M
           disable-animations: true
-          script: cd app/XDM.Android && bash tools/run-bug-hunt-phase11-validation-matrix.sh --device-only
+          disable-linux-hw-accel: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
+          script: bash app/XDM.Android/tools/run-hosted-emulator-instrumentation.sh --device
+      - name: Upload bounded hosted instrumentation crash evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xdm-hosted-instrumentation-evidence
+          path: ${{ runner.temp }}/xdm-instrumentation-evidence/
+          retention-days: 7
+          if-no-files-found: warn
 
   signed-release:
-    if: github.event_name == 'workflow_dispatch' || startsWith(github.ref, 'refs/tags/android-v')
-    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/android-v') && (github.event_name == 'push' || (github.event_name == 'workflow_dispatch' && inputs.signed_release))
+    runs-on: ubuntu-24.04
     timeout-minutes: 100
     permissions:
       contents: read
@@ -116,7 +232,9 @@ jobs:
         with:
           distribution: temurin
           java-version: '21'
-      - uses: android-actions/setup-android@v3
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
+        with:
+          packages: 'platform-tools'
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
@@ -147,14 +265,62 @@ jobs:
           test -n "$XDM_PREVIOUS_RELEASE_APK_SHA256"
           curl --fail --location --proto '=https' "$XDM_PREVIOUS_RELEASE_APK_URL" --output "$XDM_XAR16_PREVIOUS_RELEASE_APK"
           printf '%s  %s\n' "$XDM_PREVIOUS_RELEASE_APK_SHA256" "$XDM_XAR16_PREVIOUS_RELEASE_APK" | sha256sum --check --strict
+      - name: Provision Cinderbox-proven API36 Google APIs image
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash tools/provision-hosted-emulator-runtime.sh --prepare
+          sdkmanager --install 'platforms;android-36' 'build-tools;36.0.0'
+          for attempt in 1 2 3; do
+            if sdkmanager --install 'emulator' 'system-images;android-36;google_apis;x86_64'; then
+              break
+            fi
+            if [[ "$attempt" -eq 3 ]]; then
+              echo "::error::XDM_API36_IMAGE_INSTALL_FAILED"
+              exit 1
+            fi
+            sleep 10
+          done
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?}}"
+          bash tools/provision-hosted-emulator-runtime.sh --verify "$sdk_root"
+          test -d "$sdk_root/system-images/android-36/google_apis/x86_64"
+          avd_root="${ANDROID_AVD_HOME:-$HOME/.android/avd}"
+          mkdir -p "$avd_root"
+          available_kib="$(df -Pk "$avd_root" | awk 'END {print $4}')"
+          [[ "$available_kib" =~ ^[0-9]+$ ]] || { echo "::error::XDM_AVD_DISK_QUERY_FAILED"; exit 1; }
+          (( available_kib >= 4 * 1024 * 1024 )) || { echo "::error::XDM_AVD_DISK_INSUFFICIENT"; exit 1; }
+      - name: Require KVM acceleration for Android instrumentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ ! -c /dev/kvm ]]; then
+            echo "::error::/dev/kvm is unavailable; refusing unaccelerated Android instrumentation"
+            exit 1
+          fi
+          sudo chmod 0666 /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
       - name: Signed release, instrumentation, install, upgrade, and reboot gate
-        uses: reactivecircus/android-emulator-runner@v2
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
         with:
-          api-level: 35
+          api-level: 36
+          target: google_apis
           arch: x86_64
           profile: pixel_6
+          cores: 2
+          ram-size: 2048M
+          disk-size: 3072M
           disable-animations: true
-          script: cd app/XDM.Android && ./gradlew :app:connectedDebugAndroidTest && bash tools/run-xar16-signed-release-gate.sh --ci
+          disable-linux-hw-accel: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
+          script: bash app/XDM.Android/tools/run-hosted-emulator-instrumentation.sh --signed-release
+      - name: Upload bounded hosted release instrumentation crash evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: xdm-hosted-release-instrumentation-evidence
+          path: ${{ runner.temp }}/xdm-instrumentation-evidence/
+          retention-days: 7
+          if-no-files-found: warn
       - name: Attest Android publication metadata
         uses: actions/attest@v4
         with:
@@ -167,3 +333,50 @@ jobs:
           name: xdm-android-signed-release
           path: app/XDM.Android/build/release/publication/**/*
           if-no-files-found: error
+
+  emulator-compatibility:
+    # Native ARM64 Go JNI instrumentation remains a distinct, unresolved gate.
+    # This is only an API36 x86_64 emulator environment/ADB smoke test.
+    if: github.event_name != 'push' || !startsWith(github.ref, 'refs/tags/android-v')
+    needs: validate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
+        with:
+          packages: 'platform-tools'
+      - name: Provision API36 x86_64 emulator runtime dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          bash app/XDM.Android/tools/provision-hosted-emulator-runtime.sh --prepare
+          sdkmanager --install 'platforms;android-36' 'build-tools;36.0.0' 'emulator' 'system-images;android-36;google_apis;x86_64'
+          sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?}}"
+          bash app/XDM.Android/tools/provision-hosted-emulator-runtime.sh --verify "$sdk_root"
+          test -d "$sdk_root/system-images/android-36/google_apis/x86_64"
+      - name: Require hardware KVM
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -c /dev/kvm || { echo 'XGO_COMPAT_KVM_MISSING'; exit 2; }
+          sudo chmod 0666 /dev/kvm
+          test -r /dev/kvm && test -w /dev/kvm
+      - name: API36 emulator infrastructure (NO native ARM64 test)
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          cores: 2
+          ram-size: 2048M
+          disk-size: 3072M
+          disable-animations: true
+          disable-linux-hw-accel: false
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none -camera-front none
+          script: bash app/XDM.Android/tools/run-hosted-emulator-compatibility.sh

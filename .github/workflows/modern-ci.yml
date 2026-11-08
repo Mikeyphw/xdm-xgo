@@ -36,17 +36,21 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: ./app/XDM/eng/rem18-final-release-seal.ps1 -StaticOnly
-      - name: Linux final-gate package smoke matrix
+      - name: Linux x64 final-gate package smoke
         if: runner.os == 'Linux'
-        run: |
-          bash app/XDM/eng/smoke-package.sh linux-x64
-          bash app/XDM/eng/smoke-package.sh linux-arm64 --publish-only
-      - name: Windows final-gate package smoke matrix
+        run: bash app/XDM/eng/smoke-package.sh linux-x64
+      - uses: actions/setup-go@v5
+        if: runner.os == 'Windows'
+        with:
+          go-version-file: engine/go.mod
+      - name: Windows SQLite embedded CGO regression
         if: runner.os == 'Windows'
         shell: pwsh
-        run: |
-          ./app/XDM/eng/smoke-package.ps1 -Runtime win-x64
-          ./app/XDM/eng/smoke-package.ps1 -Runtime win-arm64 -PublishOnly
+        run: go test -count=1 ./engine/store/sqlite
+      - name: Windows x64 final-gate package smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./app/XDM/eng/smoke-package.ps1 -Runtime win-x64
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -54,4 +58,70 @@ jobs:
           path: |
             artifacts/test-results
             artifacts/smoke
+          if-no-files-found: ignore
+
+  native-linux-arm64:
+    # Build Go c-shared and run the published .NET app on its real CPU ABI.
+    # Never silently substitute an AMD64-only structural publish for ARM64.
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: engine/go.mod
+      - name: Linux ARM64 native package and bootstrap smoke
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = aarch64
+          test "$(go env GOARCH)" = arm64
+          bash app/XDM/eng/smoke-package.sh linux-arm64
+          go run ./engine/cmd/xgo-provenance \
+            --validate artifacts/smoke/linux-arm64/xdmcore-provenance.json \
+            --goos linux --goarch arm64 --build-mode c-shared
+          readelf -h artifacts/smoke/linux-arm64/libxdmcore.so | grep -Eq 'Machine:.*AArch64'
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: final-gate-Linux-arm64
+          path: artifacts/smoke/linux-arm64
+          if-no-files-found: ignore
+
+  native-windows-arm64:
+    # Native ARM64 c-shared builds must not be faked by an x64-only publish.
+    runs-on: windows-11-vs2026-arm
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-dotnet@v4
+        with:
+          global-json-file: global.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: engine/go.mod
+      - name: Provision SHA-256 pinned Windows ARM64 LLVM-MinGW compiler
+        shell: pwsh
+        run: ./app/XDM/eng/setup-windows-arm64-cgo.ps1
+      - name: Windows ARM64 SQLite and Go C compiler preflight
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          if ((& go env GOOS).Trim() -ne 'windows' -or (& go env GOARCH).Trim() -ne 'arm64') {
+            throw 'Expected a native Windows ARM64 runner'
+          }
+          & go env CGO_ENABLED CC
+          & go test -count=1 ./engine/store/sqlite
+          if ($LASTEXITCODE -ne 0) { throw 'Windows ARM64 embedded SQLite tests failed' }
+      - name: Windows ARM64 native package and bootstrap smoke
+        shell: pwsh
+        run: ./app/XDM/eng/smoke-package.ps1 -Runtime win-arm64
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: final-gate-Windows-arm64
+          path: artifacts/smoke/win-arm64
           if-no-files-found: ignore

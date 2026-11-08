@@ -460,6 +460,28 @@ def prove_android_bionic_link_model(cxx: Path, env: dict[str, str], build_root: 
     return metadata
 
 
+UPSTREAM_PROVIDER = '  // RC4 is in the legacy provider.\n  legacy_provider_ = OSSL_PROVIDER_load(nullptr, "legacy");\n  if (!legacy_provider_) {\n    throw DL_ABORT_EX("OSSL_PROVIDER_load \'legacy\' failed.");\n  }\n'
+SECURE_ANDROID_PROVIDER = "  // XDM's pinned static Android OpenSSL explicitly disables the legacy provider.\n  // Keep RC4 and other legacy algorithms unavailable; HTTPS/TLS requires the\n  // default provider, which is still loaded and checked immediately below.\n  // Encrypted BitTorrent handshakes requiring RC4 are deliberately unsupported.\n  legacy_provider_ = nullptr;\n"
+
+def patch_aria2_no_legacy_openssl(root: Path) -> None:
+    """Patch pinned aria2 1.37.0 after source-tree verification, before compilation."""
+    target = root / 'src' / 'Platform.cc'
+    if not target.is_file() or target.is_symlink():
+        raise SystemExit('HF19_ARIA2_PLATFORM_SOURCE_MISSING')
+    before = target.read_text(encoding='utf-8')
+    default = ('  default_provider_ = OSSL_PROVIDER_load(nullptr, "default");\n'
+               '  if (!default_provider_) {\n'
+               '    throw DL_ABORT_EX("OSSL_PROVIDER_load \'default\' failed.");\n'
+               '  }\n')
+    if before.count(default) != 1:
+        raise SystemExit('HF19_REQUIRED_DEFAULT_PROVIDER_MISSING')
+    if before.count(SECURE_ANDROID_PROVIDER) == 1 and UPSTREAM_PROVIDER not in before:
+        return
+    if before.count(UPSTREAM_PROVIDER) != 1:
+        raise SystemExit('HF19_UPSTREAM_ARIA2_PROVIDER_SOURCE_DRIFT')
+    target.write_text(before.replace(UPSTREAM_PROVIDER, SECURE_ANDROID_PROVIDER, 1), encoding='utf-8')
+
+
 def build_sources(manifest: dict, build_root: Path, jobs: int) -> tuple[Path, dict, dict, dict, dict]:
     authority = load_toolchain_authority()
     ndk = authority.detect_ndk(manifest["ndkVersion"])
@@ -496,6 +518,10 @@ def build_sources(manifest: dict, build_root: Path, jobs: int) -> tuple[Path, di
         expected = source_root / source["sourceDir"]
         authority.ensure_verified_source_tree(archive, source_root, expected, source["requiredFile"])
         source_roots[name] = expected
+
+    # Pinned upstream aria2 requires an OpenSSL legacy provider that XDM does not
+    # ship. Keep legacy crypto disabled, preserve mandatory TLS default provider.
+    patch_aria2_no_legacy_openssl(source_roots["aria2"])
 
     prefix = build_root / "prefix"
     prefix.mkdir(parents=True, exist_ok=True)

@@ -67,8 +67,15 @@ def main() -> None:
     root_workflow=(REPO/'.github/workflows/android.yml')
     if root_workflow.is_file():
         wf=root_workflow.read_text(encoding='utf-8')
-        for n in ['validate-xar16-release-evidence-seal.py','run-xar16-signed-release-gate.sh --ci','XDM_RELEASE_CERTIFICATE_NOT_AFTER','XDM_XAR16_PREVIOUS_RELEASE_APK']:
+        for n in ['validate-xar16-release-evidence-seal.py','XDM_RELEASE_CERTIFICATE_NOT_AFTER','XDM_XAR16_PREVIOUS_RELEASE_APK']:
             must(wf,n,'root workflow XAR16 release wiring')
+        signed_job = wf.split('\n  signed-release:\n', 1)
+        if len(signed_job) == 2 and 'script: bash app/XDM.Android/tools/run-hosted-emulator-instrumentation.sh --signed-release' in signed_job[1]:
+            must(read('tools/run-hosted-emulator-instrumentation.sh'),
+                 'bash tools/run-xar16-signed-release-gate.sh --ci',
+                 'HF10 hosted emulator wrapper must retain XAR16 release delegation')
+        else:
+            must(wf,'bash tools/run-xar16-signed-release-gate.sh --ci','root workflow XAR16 release wiring')
     inner=(ROOT/'.github/workflows/android.yml')
     if inner.is_file():
         iw=inner.read_text(encoding='utf-8')
@@ -85,7 +92,8 @@ def main() -> None:
     must(app_gradle,'environment("PYTHONDONTWRITEBYTECODE", "1")','app validator bytecode-cache suppression')
     must(read('tools/verify-ffmpeg-runtime.py'),'{"schemaVersion": 2}','FFmpeg runtime v2 schema verifier')
     must(read('tools/verify-ffmpeg-runtime.py'),'stale for source-only validation','FFmpeg source-only stale runtime tolerance')
-    must(read('tools/verify-aria2-runtime.py'),'"schemaVersion": MANIFEST["schemaVersion"]','aria2 runtime schemaVersion verifier')
+    must(read('tools/verify-aria2-runtime.py'),'if MANIFEST.get("schemaVersion") != 3:','aria2 manifest schema-v3 guard')
+    must(read('tools/verify-aria2-runtime.py'),'if lock.get("schemaVersion") != MANIFEST["schemaVersion"]:','aria2 runtime lock-to-manifest schema verifier')
     must(read('tools/verify-aria2-runtime.py'),'stale for source-only validation','aria2 source-only stale runtime tolerance')
     planner=read('core-model/src/main/kotlin/com/mikeyphw/xdm/android/model/EngineEscalationPlanner.kt')
     if planner.count('aria2Eligible = aria2Eligible') < 3:

@@ -109,13 +109,13 @@ jobs:
           - os: ubuntu-latest
             rid: linux-x64
             shell: bash
-          - os: ubuntu-latest
+          - os: ubuntu-24.04-arm
             rid: linux-arm64
             shell: bash
           - os: windows-latest
             rid: win-x64
             shell: pwsh
-          - os: windows-latest
+          - os: windows-11-vs2026-arm
             rid: win-arm64
             shell: pwsh
     runs-on: ${{ matrix.os }}
@@ -127,6 +127,13 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: engine/go.mod
+      - name: Provision SHA-256 pinned Windows ARM64 LLVM-MinGW compiler
+        if: runner.os == 'Windows' && matrix.rid == 'win-arm64'
+        shell: pwsh
+        run: ./app/XDM/eng/setup-windows-arm64-cgo.ps1
       - name: Publish and package Linux
         if: runner.os == 'Linux'
         run: app/XDM/eng/publish-one.sh ${{ matrix.rid }} ${{ needs.resolve.outputs.version }}
