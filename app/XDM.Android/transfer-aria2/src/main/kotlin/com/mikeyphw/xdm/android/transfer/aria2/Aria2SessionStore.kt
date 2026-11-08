@@ -31,7 +31,9 @@ class Aria2SessionStore(
         }
         if (!sessionFile.exists()) check(sessionFile.createNewFile()) { "Unable to create aria2 session file" }
         sessionFile.restrictToOwner()
-        cleanupTransientLaunchConfigurations()
+        // Never prune launch-*.conf here: prepare() is also called by logFile()
+        // immediately after writeLaunchConfiguration(), before aria2 can open it.
+        // start() and repair() explicitly remove abandoned configs before launch.
         rotateRuntimeLog()
     }
 
