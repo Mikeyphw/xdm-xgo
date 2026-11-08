@@ -2,6 +2,8 @@ name: XDM Android CI
 
 on:
   push:
+    branches: [main]
+    tags: ['android-v*']
     paths:
       - 'app/XDM.Android/**'
       - 'engine/**'
@@ -12,6 +14,7 @@ on:
       - '.github/workflows/android.yml'
       - 'scripts/xgo_hf16_apk_pair.py'
       - 'scripts/test_xgo_hf16_apk_pair.py'
+      - 'scripts/test_xgo_hf18_ci_dispatch.py'
       - 'scripts/test_xgo_hf15_no_firebase.py'
       - 'scripts/run_physical_arm64_instrumentation.sh'
   pull_request:
@@ -25,10 +28,16 @@ on:
       - '.github/workflows/android.yml'
       - 'scripts/xgo_hf16_apk_pair.py'
       - 'scripts/test_xgo_hf16_apk_pair.py'
+      - 'scripts/test_xgo_hf18_ci_dispatch.py'
       - 'scripts/test_xgo_hf15_no_firebase.py'
       - 'scripts/run_physical_arm64_instrumentation.sh'
   workflow_dispatch:
     inputs:
+      arm64_translation_diagnostic:
+        description: 'Manual ARM64-on-x86 crash diagnostics ONLY (not device acceptance)'
+        required: false
+        type: boolean
+        default: false
       signed_release:
         description: 'Authorize signing only for an android-v* release tag'
         required: false
@@ -81,6 +90,9 @@ jobs:
       - name: HF17 offline APK pair regressions
         working-directory: .
         run: python3 -B scripts/test_xgo_hf16_apk_pair.py
+      - name: HF18 CI dispatch and release boundary regressions
+        working-directory: .
+        run: python3 -B scripts/test_xgo_hf18_ci_dispatch.py
       - name: Post-DL03 final common validation
         run: bash tools/run-final-common-validation.sh
       - name: Verify and stage one native ARM64 debug/instrumentation APK pair
@@ -110,6 +122,9 @@ jobs:
           if-no-files-found: error
 
   instrumentation:
+    # The ARM64 JNI Go core SIGILLs under x86_64 libndk_translation (cpu.getMIDR).
+    # Manual crash diagnostics only; physical native testing is separate.
+    if: github.event_name == 'workflow_dispatch' && inputs.arm64_translation_diagnostic
     needs: validate
     runs-on: ubuntu-24.04
     timeout-minutes: 60

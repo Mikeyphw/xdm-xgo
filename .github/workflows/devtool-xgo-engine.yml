@@ -1,6 +1,7 @@
 name: Devtool XGO Go engine candidate
 on:
   push:
+    branches: [main]
     paths:
       - 'engine/**'
       - 'tools/xgo/**'
