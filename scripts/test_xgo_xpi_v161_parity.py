@@ -94,6 +94,55 @@ class XpiReferenceParity(unittest.TestCase):
         self.assertIn('package=idm.internet.download.manager.plus',handoff)
         self.assertIn('return ""',handoff)
 
+    def test_xar10_source_gate_matches_v161_closed_shadow_and_one_selected_media(self):
+        # XAR10 must test executable code instead of historical explanatory strings.
+        gate=(ROOT/'app/XDM.Android/tools/validate-xar10-browser-capture-evidence.py').read_text()
+        fab=(SRC/'fab.js').read_text()
+        network=(SRC/'network-observer.js').read_text()
+        for expected in [
+            'shadow = host.attachShadow({ mode: "closed" });',
+            'host.dataset.candidateCount = String(current.candidateCount);',
+        ]:
+            self.assertIn(expected,gate)
+            self.assertIn(expected,fab)
+        for expected in [
+            'function requireSingleSelectedCandidate',
+            'const candidate = Object.assign({}, selected, { streamKind: candidateStreamKind(selected) });',
+            'candidates: [candidate]',
+            'totalCandidateCount: 1',
+            'truncated: false',
+        ]:
+            self.assertIn(expected,gate)
+            self.assertIn(expected,network)
+        self.assertNotIn('closed Shadow DOM keeps privileged XDM capture URLs',gate)
+        self.assertNotIn('refusing to drop selected variants/tracks',gate)
+        self.assertNotIn('attachShadow({ mode: "open" })',fab)
+        result=subprocess.run([
+            sys.executable,'-B',str(ROOT/'app/XDM.Android/tools/validate-xar10-browser-capture-evidence.py')
+        ],cwd=ROOT/'app/XDM.Android',capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stdout+'\n'+result.stderr)
+    def test_xfe01_desktop_canonical_baseline_matches_current_xpi(self):
+        source=ROOT/'app/XDM/eng/validate-xfe01-single-firefox-extension.py'
+        self.assertTrue(source.is_file())
+        code=source.read_text()
+        # All 16 XFE01 baselines must match the canonical on-disk source, not only the seven imported assets.
+        desktop_hashes=dict(re.findall(r'^[ ]+"([^"]+)": "([0-9a-f]{64})",?$',code,re.M))
+        self.assertEqual(len(desktop_hashes),16)
+        for asset,digest in desktop_hashes.items():
+            data=(SRC/asset).read_bytes()
+            if asset.endswith(('.js','.css','.html','.json')):
+                self.assertNotIn(bytes((13,)),data.replace(bytes((13,10)),b''))
+                data=data.replace(bytes((13,10)),bytes((10,)))
+            self.assertEqual(sha(data),digest,asset)
+        reference=self.ref['adoptedAssetSha256']
+        for asset,digest in reference.items():
+            self.assertIn('"'+asset+'": "'+digest+'"',code)
+        result=subprocess.run([
+            sys.executable,'-B',str(source)
+        ],cwd=ROOT,capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stdout+result.stderr)
+
+
     def test_release_boundary_is_unchanged(self):
         w=(ROOT/'.github/workflows/android.yml').read_text()
         self.assertEqual(sha(release_block(w).encode()),SIGNED_RELEASE_SHA)

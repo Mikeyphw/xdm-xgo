@@ -40,8 +40,8 @@ def coverage() -> None:
 def source_contracts() -> None:
     require(
         "browser-extension/src/main/extension/xdm-firefox/fab.js",
-        "closed Shadow DOM keeps privileged XDM capture URLs",
-        "attachShadow({ mode: \"closed\" })",
+        'shadow = host.attachShadow({ mode: "closed" });',
+        'host.dataset.candidateCount = String(current.candidateCount);',
     )
     require(
         "browser-extension/src/main/extension/xdm-firefox/candidate-store.js",
@@ -71,7 +71,11 @@ def source_contracts() -> None:
         "candidateStore.clearDocumentEvidence",
         "This site is disabled by XDM site-mode settings.",
         "auto-offer suppression is committed only after handoff construction",
-        "refusing to drop selected variants/tracks",
+        "function requireSingleSelectedCandidate",
+        "const candidate = Object.assign({}, selected, { streamKind: candidateStreamKind(selected) });",
+        "candidates: [candidate]",
+        "totalCandidateCount: 1",
+        "truncated: false",
     )
     require(
         "browser-extension/src/main/extension/xdm-firefox/popup.js",
