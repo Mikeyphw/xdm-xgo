@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """HF19 offline native runtime CI contracts; no Gradle/ADB/SDK/network."""
 import ast
+import hashlib
 import importlib.util
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -12,7 +12,7 @@ BUILDER = ROOT / 'app/XDM.Android/tools/build-aria2-runtime.py'
 COMMON = ROOT / 'app/XDM.Android/tools/run-final-common-validation.sh'
 WF = ROOT / '.github/workflows/android.yml'
 SSL = ROOT / 'app/XDM.Android/tools/android_native_openssl.py'
-BASE = 'ef0892eeca92e469f8170d543fbb295c68f1ecab'
+SIGNED_RELEASE_SHA256 = 'f84b6fe9830f938250e406b62087002558819fc95f333fe04219ae66ca8becd3'  # HF18 verified release baseline
 
 class HF19(unittest.TestCase):
     def test_openssl_legacy_remains_disabled(self):
@@ -77,9 +77,11 @@ class HF19(unittest.TestCase):
 
     def test_signed_release_byte_identical(self):
         current = WF.read_text().split('\n  signed-release:\n',1)[1].split('\n  emulator-compatibility:\n',1)[0]
-        prior = subprocess.check_output(['git','-C',str(ROOT),'show',BASE+':.github/workflows/android.yml'],text=True)
-        baseline = prior.split('\n  signed-release:\n',1)[1].split('\n  emulator-compatibility:\n',1)[0]
-        self.assertEqual(current,baseline)
+        # GitHub PR checkouts are intentionally shallow. No history/ref fetch is
+        # needed: compare the complete signed-release stanza against the SHA-256
+        # measured from the last known-good HF18 release job. This fails closed
+        # on *any* byte drift, including secrets, gates and publication steps.
+        self.assertEqual(hashlib.sha256(current.encode('utf-8')).hexdigest(), SIGNED_RELEASE_SHA256)
         self.assertIn('XDM_XAR16_FULL_RELEASE_GATE',current)
         self.assertIn('run-hosted-emulator-instrumentation.sh --signed-release',current)
 
