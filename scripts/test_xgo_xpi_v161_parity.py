@@ -174,6 +174,49 @@ class XpiReferenceParity(unittest.TestCase):
         result=subprocess.run([sys.executable,'-B',str(ROOT/'app/XDM.Android/tools/validate-runtime-foundation-phase59-61.py')],cwd=ROOT/'app/XDM.Android',capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stdout+"\n"+result.stderr)
 
+    def test_retained_parity02_and_phase43a_seals_match_v161_picker(self):
+        parity=(ROOT/'app/XDM.Android/tools/validate-media-parity02-logical-capture.py').read_text()
+        phase=(ROOT/'app/XDM.Android/tools/validate-phase-43a-browser-extension-parity.py').read_text()
+        popup=(SRC/'popup.js').read_text()
+        network=(SRC/'network-observer.js').read_text()
+        fab=(SRC/'fab.js').read_text()
+        manifest=json.loads((SRC/'manifest.template.json').read_text())
+        self.assertNotIn("'Send ${count} to XDM' in popup",parity)
+        for marker in ('async function sendSelectedLogicalCandidate(target)',
+                       'logicalMediaIds: [id]', 'sendSelectedLogicalCandidatesToOneDm'):
+            self.assertIn(marker,popup)
+            self.assertIn(marker,parity)
+        for marker in ('if (ids.length !== 1)','candidates: [candidate]',
+                       'const chooserRequired = true;', 'const prebuiltXdmLink = "";'):
+            self.assertIn(marker,network)
+            self.assertIn(marker,parity)
+        self.assertIn('shadow = host.attachShadow({ mode: "closed" });',fab)
+        self.assertIn('1.6.1',phase)
+        self.assertIn('"handoff.js",\n    "network-observer.js",',phase)
+        self.assertEqual(manifest['background']['scripts'],
+            ['generated-config.js','detector-core.js','candidate-store.js','handoff.js','network-observer.js'])
+        verifier=(MODULE/'tools/verify_release_artifacts.py').read_text()
+        devtool=(ROOT/'.devtool.toml').read_text()
+        gradle=(MODULE/'build.gradle.kts').read_text()
+        project=json.loads((ROOT/'app/XDM.Android/PROJECT_MANIFEST.json').read_text())
+        self.assertIn(r'REQUIRED_FILES={',verifier)
+        self.assertIn('"bridge-selftest.js"',verifier)
+        self.assertIn(r'REQUIRED_FILES\s*=',phase)
+        for task in ('":browser-extension:jsTest"',
+                     '":browser-extension:test"',
+                     '":browser-extension:validateFirefoxExtension"'):
+            self.assertIn(task,devtool)
+            self.assertIn(task,phase)
+        self.assertIn('dependsOn(verifyFirefoxExtensionReleaseArtifacts)',gradle)
+        self.assertIn('dependsOn(verifyFirefoxExtensionReleaseArtifacts)',phase)
+        self.assertEqual(project['next_phase'],'XAR17_313_root_closure_audit_final_gate')
+        self.assertIn('"XAR17_313_root_closure_audit_final_gate"',phase)
+        for gate in ('validate-media-parity02-logical-capture.py',
+                     'validate-phase-43a-browser-extension-parity.py'):
+            result=subprocess.run([sys.executable,'-B',str(ROOT/'app/XDM.Android/tools'/gate)],
+                cwd=ROOT/'app/XDM.Android',capture_output=True,text=True)
+            self.assertEqual(result.returncode,0,gate+'\n'+result.stdout+'\n'+result.stderr)
+
     def test_release_boundary_is_unchanged(self):
         w=(ROOT/'.github/workflows/android.yml').read_text()
         self.assertEqual(sha(release_block(w).encode()),SIGNED_RELEASE_SHA)

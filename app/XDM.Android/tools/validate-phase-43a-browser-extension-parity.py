@@ -49,6 +49,7 @@ expected_background_order = [
     "generated-config.js",
     "detector-core.js",
     "candidate-store.js",
+    "handoff.js",
     "network-observer.js",
 ]
 background_js = (manifest.get("background") or {}).get("scripts") or []
@@ -130,12 +131,12 @@ for needle in (
     "fabShowSuccesses",
     "fabShowFailures",
     "showManualWithDiagnostics",
-    "version: \"1.2.0\"",
+    "version: \"1.6.1\"",
 ):
     require(bridge, needle, "frame bridge diagnostics")
 require_regex(
     bridge,
-    r"const playback = evaluateAllVideos\(\);.*?if \(!playback\.offered && input\.displayFallback",
+    r"const playback = evaluateAllVideos\(\);.*?const shouldRender = pickerRequired \|\| \(!playback\.offered && input\.displayFallback",
     "network fallback must depend on offered launcher, not just playing video",
 )
 require(bridge, "return Object.freeze({ seenPlaying, offered });", "playback offer result")
@@ -163,14 +164,22 @@ release_verifier = read("browser-extension/tools/verify_release_artifacts.py")
 require(release_verifier, '"bridge-selftest.js"', "release XPI verifier inventory")
 require_regex(
     release_verifier,
-    r"REQUIRED_FILES = \{\s*\"bridge-selftest\.js\"",
+    r"REQUIRED_FILES\s*=\s*\{[^}]*\"bridge-selftest\.js\"[^}]*\}",
     "release verifier must list bridge-selftest before generated XPI inventory comparison",
 )
 
 devtool_toml = read(".devtool.toml", repository=True)
-release_verify_task = '":browser-extension:verifyFirefoxExtensionReleaseArtifacts"'
-if devtool_toml.count(release_verify_task) < 2:
-    raise SystemExit("Phase 43A Devtool validation must run browser-extension release artifact verification in both build and package lanes")
+# Devtool retains source test and generated-XPI validation, while
+# the release XPI verification is owned by the browser-extension Gradle gate.
+for required_task in ('":browser-extension:jsTest"',
+                      '":browser-extension:test"',
+                      '":browser-extension:validateFirefoxExtension"'):
+    require(devtool_toml, required_task, "current Devtool browser extension validation")
+release_gradle = read("browser-extension/build.gradle.kts")
+require(release_gradle, 'val verifyFirefoxExtensionReleaseArtifacts = tasks.register<Exec>',
+        "release artifact verifier task")
+require(release_gradle, 'dependsOn(verifyFirefoxExtensionReleaseArtifacts)',
+        "browser extension signed release artifact gate")
 
 source_contract = read("browser-extension/src/main/kotlin/com/mikeyphw/xdm/android/browserextension/BrowserExtensionSourceContract.kt")
 contract_test = read("browser-extension/src/test/kotlin/com/mikeyphw/xdm/android/browserextension/BrowserExtensionSourceContractTest.kt")
@@ -180,8 +189,8 @@ for source, label in ((source_contract, "source contract"), (contract_test, "sou
 phase_test = read("browser-extension/tests/test_phase43a_bridge.js")
 for needle in (
     "probe FAB must render on a plain HTTPS page",
-    "high-confidence HLS network candidate must show without visible video",
-    "blocked blob playback must not suppress the network fallback FAB",
+    "high-confidence HLS network candidate must show with a direct-v3 XDM handoff",
+    "blocked blob playback must not suppress the encrypted network fallback FAB",
     "missing handoff must fail visibly",
     "testSetTimeout",
 ):
@@ -210,7 +219,11 @@ project_manifest = json.loads(read("PROJECT_MANIFEST.json"))
 phase = project_manifest.get("browser_bridge_phase43a_extension_parity") or {}
 if phase.get("program") != "android_browser_bridge" or phase.get("manual_fab_plain_https_exit_gate") is not True:
     raise SystemExit("Phase 43A project manifest entry is missing or incomplete")
-if project_manifest.get("next_phase") != "Phase 43B Add Download media recommendation demotion":
+allowed_next_phases = {
+    "Phase 43B Add Download media recommendation demotion",
+    "XAR17_313_root_closure_audit_final_gate",
+}
+if project_manifest.get("next_phase") not in allowed_next_phases:
     raise SystemExit(f"Phase 43A next phase mismatch: {project_manifest.get('next_phase')!r}")
 
 # Guard against scope creep: Phase 43A is extension-only plus docs/contracts.
