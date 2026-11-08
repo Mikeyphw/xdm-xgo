@@ -98,6 +98,9 @@ jobs:
       - name: HF19 ARM64 native payload gate regressions
         working-directory: .
         run: python3 -B scripts/test_xgo_hf19_arm64_runtime_gate.py
+      - name: HF20 aria2 launch configuration lifecycle regression
+        working-directory: .
+        run: python3 -B scripts/test_xgo_hf20_aria2_launch_config.py
       - name: Post-DL03 final common validation
         run: bash tools/run-final-common-validation.sh
       - name: Verify pinned FFmpeg and FFprobe in the debug APK (source attestation and 16 KiB)

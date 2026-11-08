@@ -7,6 +7,7 @@ import androidx.test.platform.app.InstrumentationRegistry
 import com.mikeyphw.xdm.android.transfer.Aria2TaskMapping
 import com.mikeyphw.xdm.android.transfer.aria2.AndroidAria2CapabilityProbe
 import com.mikeyphw.xdm.android.transfer.aria2.AppPrivateAria2SecretProvider
+import com.mikeyphw.xdm.android.transfer.aria2.Aria2Endpoint
 import com.mikeyphw.xdm.android.transfer.aria2.Aria2ProcessManager
 import com.mikeyphw.xdm.android.transfer.aria2.Aria2ProcessState
 import com.mikeyphw.xdm.android.transfer.aria2.Aria2SessionStore
@@ -35,6 +36,31 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class Aria2Rm08PackagedRuntimeInstrumentedTest {
+    @Test
+    fun launchConfigurationSurvivesRoutinePreparationUntilExplicitCleanup() {
+        val instrumentation = InstrumentationRegistry.getInstrumentation()
+        val fixture = Fixture(
+            context = instrumentation.targetContext,
+            testContext = instrumentation.context,
+        )
+        fixture.reset()
+        val store = fixture.newStore()
+        val secret = AppPrivateAria2SecretProvider(fixture.context).getOrCreate()
+        val configuration = store.writeLaunchConfiguration(Aria2Endpoint(47890), secret)
+        try {
+            assertTrue("Generated aria2 config must exist before launch", configuration.isFile)
+            store.logFile()
+            assertTrue("logFile() must not delete an active launch config", configuration.isFile)
+            store.prepare()
+            assertTrue("prepare() must not delete an active launch config", configuration.isFile)
+            assertEquals(1, store.cleanupTransientLaunchConfigurations())
+            assertFalse(configuration.exists())
+        } finally {
+            store.deleteLaunchConfiguration(configuration)
+            fixture.reset()
+        }
+    }
+
     @Test
     fun packagedRuntimeEnforcesTlsAndRecoversSavedOwnedSession() = runBlocking {
         val instrumentation = InstrumentationRegistry.getInstrumentation()
