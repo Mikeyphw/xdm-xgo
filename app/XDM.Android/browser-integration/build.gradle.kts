@@ -3,10 +3,10 @@ android {
     namespace = "com.mikeyphw.xdm.android.browser"
     compileSdk = 36
     buildToolsVersion = "36.0.0"
-    defaultConfig { minSdk = 26 }
+    defaultConfig { minSdk = 26; testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner" }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_21; targetCompatibility = JavaVersion.VERSION_21 }
     lint { abortOnError = true; warningsAsErrors = true; disable += "GradleDependency" }
 }
 
 
-dependencies { implementation(project(":core-model")); implementation(project(":transfer-api")); implementation(libs.kotlinx.coroutines.android); testImplementation(libs.junit) }
+dependencies { implementation(project(":core-model")); implementation(project(":transfer-api")); implementation(libs.kotlinx.coroutines.android); testImplementation(libs.junit); androidTestImplementation(libs.androidx.test.ext.junit); androidTestImplementation(libs.androidx.test.runner) }
