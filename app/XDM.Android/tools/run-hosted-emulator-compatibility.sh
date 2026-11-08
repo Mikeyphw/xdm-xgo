@@ -15,4 +15,5 @@ prop() { adb -s "$serial" shell getprop "$1" | tr -d '\r'; }
 [[ "$(prop sys.boot_completed)" == 1 ]] || { echo XGO_COMPAT_NOT_BOOTED >&2; exit 2; }
 adb -s "$serial" shell cmd package list packages >/dev/null || { echo XGO_COMPAT_PACKAGE_MANAGER_FAILED >&2; exit 2; }
 adb -s "$serial" shell pm list instrumentation >/dev/null || { echo XGO_COMPAT_INSTRUMENTATION_SERVICE_FAILED >&2; exit 2; }
-echo 'XGO_EMULATOR_COMPATIBILITY_PASS: API36/KVM/ADB/package-manager only; ARM64 instrumentation NOT executed'
+echo 'XGO_EMULATOR_COMPATIBILITY_PASS: API36/KVM/ADB/package-manager; native ARM64 still excluded'
+bash "$repo_root/app/XDM.Android/tools/run-hosted-emulator-persistence-tests.sh"
