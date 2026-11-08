@@ -46,11 +46,13 @@ class FakeElement {
     this.parentNode = null;
     this.isConnected = false;
   }
-  attachShadow() {
-    this.shadowRoot = new FakeElement("shadow-root");
-    this.shadowRoot.host = this;
-    this.shadowRoot.isConnected = true;
-    return this.shadowRoot;
+  attachShadow({ mode } = {}) {
+    this._attachedShadow = new FakeElement("shadow-root");
+    this._attachedShadow.host = this;
+    this._attachedShadow.isConnected = true;
+    this.shadowRoot = mode === "open" ? this._attachedShadow : null;
+    this._shadowMode = mode;
+    return this._attachedShadow;
   }
   setAttribute(name, value) { this.attributes[name] = String(value); }
   getAttribute(name) { return this.attributes[name]; }
@@ -183,7 +185,7 @@ let manual = plain.__xdmInPageBridgeV1.showManualWithDiagnostics({ mode: "probe"
 assert.strictEqual(manual.shown, true, "probe FAB must render on a plain HTTPS page");
 assert.strictEqual(manual.health.hasHandoff, true);
 assert.strictEqual(manual.health.hasFab, true);
-assert(host(plain) && host(plain).shadowRoot, "manual probe must leave the real FAB mounted");
+assert(host(plain) && host(plain).shadowRoot === null && host(plain)._attachedShadow, "manual probe must mount a closed-shadow FAB");
 
 const secureCaptureLink = "xdmdownload://capture?v=3&url=https%3A%2F%2Fcdn.example%2Fvideo.mp4&kind=video";
 const noEncryptedFallback = createContext();
@@ -208,6 +210,16 @@ assert.strictEqual(networkOnly.__xdmInPageBridgeV1.offerNetwork({
   prebuiltXdmLink: secureCaptureLink
 }), true, "high-confidence HLS network candidate must show with a direct-v3 XDM handoff");
 assert.strictEqual(host(networkOnly).dataset.streamKind, "hls");
+
+const pickerOnly = createContext();
+assert.strictEqual(pickerOnly.__xdmInPageBridgeV1.offerNetwork({
+  url: "https://cdn.example/master.m3u8", manifest: true,
+  contentType: "application/vnd.apple.mpegurl", displayFallback: true,
+  candidateCount: 2, streamKind: "hls", pickerRequired: true,
+  prebuiltXdmLink: "", prebuiltOneDmLink: ""
+}), true, "a background single-choice offer must render even without prebuilt native links");
+assert(host(pickerOnly) && host(pickerOnly).dataset.target === "picker", "background offer must mount the media chooser, not an automatic download");
+assert.strictEqual(host(pickerOnly).shadowRoot, null, "the media chooser must retain closed Shadow DOM");
 
 const encryptedBlobVideo = new FakeVideoElement();
 encryptedBlobVideo.currentSrc = "blob:https://page.example/opaque";

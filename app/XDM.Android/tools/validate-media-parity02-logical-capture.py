@@ -76,7 +76,26 @@ handoff=(ext/'handoff.js').read_text()
 for s in ('logicalMediaUrl','parseHlsRelationships','variantInfo','trackInfo','encryptedAes128','protectedMedia','lowLatency'):
  req(s in det,f'Firefox detector missing {s}')
 req('logicalMediaId' in store and 'segmentCount' in store and 'observationCount' in store,'Firefox candidate store lacks logical grouping metadata')
-req('logicalMediaCandidates' in popup and 'Send ${count} to XDM' in popup,'Firefox pre-handoff chooser missing')
+# XP01 v1.6.1: the popup and the in-page FAB use exactly-one selection.
+# The historical multi-item "Send N to XDM" button is intentionally retired.
+for marker in ('logicalMediaCandidates', 'async function sendSelectedLogicalCandidate(target)',
+               'const id = selectedLogicalId();', 'logicalMediaIds: [id]',
+               'sendSelectedLogicalCandidatesToOneDm'):
+ req(marker in popup, f'Firefox explicit single-choice popup missing {marker}')
+network=(ext/'network-observer.js').read_text()
+for marker in ('function requireSingleSelectedCandidate(tabId, requestedIds, targetLabel)',
+               'if (ids.length !== 1)', 'if (selected.length !== 1)',
+               'const chooserRequired = true;', 'const prebuiltXdmLink = "";',
+               'const prebuiltOneDmLink = "";', 'const capturedCandidateCount = 0;',
+               'candidates: [candidate]', 'totalCandidateCount: 1', 'truncated: false'):
+ req(marker in network, f'Firefox one-item evidence-gated dispatch missing {marker}')
+req('visibleCandidates.slice(0, MAX_HANDOFF_CANDIDATES)' not in network,
+    'retired automatic multi-item handoff must stay absent')
+fab=(ext/'fab.js').read_text()
+for marker in ('shadow = host.attachShadow({ mode: "closed" });',
+               'pickerRequired: Boolean(input.pickerRequired || input.chooserRequired)',
+               'make("section", "xdm-picker")', 'logicalMediaIds: [selectedLogicalId]'):
+ req(marker in fab, f'Firefox in-page picker missing {marker}')
 for s in ('logicalMediaId','canonicalUrl','variantInfo','trackInfo','observationCount','segmentCount'):
  req(s in handoff,f'Firefox direct-v3 handoff missing {s}')
 

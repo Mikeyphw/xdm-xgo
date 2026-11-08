@@ -2,13 +2,15 @@
   "manifest_version": 2,
   "name": "XDM Android Media Bridge",
   "version": "@@EXTENSION_VERSION@@",
-  "description": "Detect browser media and hand it to XDM Android or 1DM+ through a themed in-page FAB.",
+  "description": "Detect page media, keep the floating action button visible, show a metadata-rich single-choice media picker, and send one selected item to XDM Android or 1DM+.",
   "browser_specific_settings": {
     "gecko": {
       "id": "xdm-android-media-bridge@mikeyphw",
       "strict_min_version": "115.0",
       "data_collection_permissions": {
-        "required": ["none"],
+        "required": [
+          "none"
+        ],
         "optional": []
       }
     }
@@ -31,7 +33,9 @@
   },
   "content_scripts": [
     {
-      "matches": ["<all_urls>"],
+      "matches": [
+        "<all_urls>"
+      ],
       "js": [
         "bridge-selftest.js",
         "generated-config.js",
@@ -43,9 +47,13 @@
       "all_frames": true
     }
   ],
-  "web_accessible_resources": ["page-sniffer.js"],
+  "web_accessible_resources": [
+    "page-sniffer.js"
+  ],
   "browser_action": {
-    "default_icon": {"48": "icons/icon48.png"},
+    "default_icon": {
+      "48": "icons/icon48.png"
+    },
     "default_title": "XDM Android Media Bridge",
     "default_popup": "popup.html"
   },

@@ -13,7 +13,7 @@ dependencies { testImplementation(libs.junit) }
 val extensionSource = layout.projectDirectory.dir("src/main/extension/xdm-firefox")
 val unpackedOutput = layout.buildDirectory.dir("firefox/unpacked")
 val xpiOutput = layout.buildDirectory.dir("outputs/xpi")
-val extensionVersion = "1.3.0"
+val extensionVersion = "1.6.1"
 val androidAppVersion = "0.21.0"
 
 val prepareFirefoxExtension = tasks.register<Exec>("prepareFirefoxExtension") {
@@ -29,10 +29,10 @@ val prepareFirefoxExtension = tasks.register<Exec>("prepareFirefoxExtension") {
         "--output", unpackedOutput.get().asFile.absolutePath,
         "--extension-version", extensionVersion,
         "--app-version", androidAppVersion,
-        "--application-id", "com.mikeyphw.xdm.android",
+        "--application-id", "com.mikeyphw.xdm.android.debug",
         "--channel", "debug",
-        "--xdm-scheme", "xdmdownload",
-        "--default-target", "ask",
+        "--xdm-scheme", "xdmdownload-debug",
+        "--default-target", "xdm",
         "--theme", "dark",
     )
 }

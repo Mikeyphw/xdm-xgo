@@ -9,6 +9,7 @@
   const PLAYBACK_TYPE = "xdmFramePlaybackV1";
   const GET_LOGICAL_CANDIDATES_TYPE = "xdmGetLogicalCandidatesV2";
   const SEND_LOGICAL_CANDIDATES_TYPE = "xdmSendLogicalCandidatesV2";
+  const SEND_LOGICAL_CANDIDATES_1DM_TYPE = "xdmSendLogicalCandidatesTo1DmV1";
   const HEADER_ALLOWLIST = new Set(["authorization", "cookie", "referer", "user-agent", "origin", "accept", "accept-language", "range"]);
   const MAX_DIAGNOSTIC_TABS = 40;
   const MAX_CANDIDATES_PER_TAB = 160;
@@ -16,7 +17,6 @@
   const SAME_URL_SUPPRESS_MS = 90 * 1000;
   const AUTO_OFFER_THRESHOLD = 850;
   const POSSIBLE_OFFER_THRESHOLD = 700;
-  const MAX_HANDOFF_CANDIDATES = 24;
 
   const capturedHeaders = new Map();
   const tabDispatchSessions = new Map();
@@ -44,7 +44,7 @@
       await browser.storage.local.set({
         [STATUS_KEY]: Object.assign({
           active: true,
-          version: "1.3.0",
+          version: "1.6.0",
           startedAt: Date.now(),
           lastError: ""
         }, previous[STATUS_KEY] || {}, extra)
@@ -360,49 +360,16 @@
 
     const session = captureSessionFor(tabId);
     session.revision = Math.max(Number(session.revision || 0), candidateRevision, Date.now());
-    const sessionCandidates = visibleCandidates.slice(0, MAX_HANDOFF_CANDIDATES).map(item => Object.assign({}, item, {
-      streamKind: candidateStreamKind(item),
-    }));
-    let prebuiltXdmLink = "";
-    const handoff = globalThis.XdmHandoffV1;
-    if (handoff && typeof handoff.buildCaptureSession === "function") {
-      try {
-        prebuiltXdmLink = await handoff.buildCaptureSession({
-          sessionId: session.id,
-          revision: session.revision,
-          pageUrl: tab.url,
-          title: tab.title || "Detected video",
-          candidates: sessionCandidates,
-          totalCandidateCount: candidateCount,
-          truncated: candidateCount > sessionCandidates.length,
-          scheme: globalThis.XdmExtensionConfig && globalThis.XdmExtensionConfig.xdmScheme,
-        });
-      } catch (error) {
-        publishStatus({ lastError: `XDM capture handoff failed: ${error && error.message ? error.message : String(error)}`, lastErrorAt: Date.now() });
-      }
-    }
+    // Detected media is always resolved through the in-page single-choice picker.
+    // Keep the FAB visible even when multiple logical media items are present; the
+    // picker reads the live candidate store and enforces exactly one selected item.
+    const chooserRequired = true;
+    // No app handoff is prebuilt for automatic detection. The FAB opens the live picker,
+    // and the authoritative XDM/1DM handoff is built only after one candidate is selected.
+    const prebuiltXdmLink = "";
+    const prebuiltOneDmLink = "";
 
-    if (!prebuiltXdmLink && candidateCount > sessionCandidates.length) {
-      publishStatus({
-        lastError: "XDM capture handoff is too large; refusing to drop selected variants/tracks. Filter candidates and try again.",
-        lastErrorAt: Date.now(),
-      });
-      return;
-    }
-
-    if (!prebuiltXdmLink && settings.defaultTarget === "xdm") {
-      publishStatus({
-        lastError: "XDM capture handoff could not be built from the selected media candidate.",
-        lastErrorAt: Date.now(),
-      });
-      return;
-    }
-
-    let capturedCandidateCount = 0;
-    if (prebuiltXdmLink) {
-      try { capturedCandidateCount = Math.max(0, Number(new URL(prebuiltXdmLink).searchParams.get("capturedCandidateCount") || 0)); } catch (_) {}
-    }
-    if (!capturedCandidateCount && prebuiltXdmLink) capturedCandidateCount = Math.min(1, sessionCandidates.length);
+    const capturedCandidateCount = 0;
 
     const payload = Object.assign({}, candidate, {
       tabUrl: tab.url,
@@ -413,6 +380,8 @@
       thumbnailUrl: candidate.thumbnailUrl || "",
       thumbnailProvenance: candidate.thumbnailProvenance || "Unknown",
       candidateCount,
+      chooserRequired,
+      pickerRequired: chooserRequired,
       streamKind: candidateStreamKind(candidate),
       rank,
       stableMediaId: candidate.stableMediaId || CORE.stableMediaIdentity(candidate.url, candidate.requestFingerprint),
@@ -421,6 +390,7 @@
       browserHandoff: candidate.browserHandoff || null,
       captureSessionId: session.id,
       prebuiltXdmLink,
+      prebuiltOneDmLink,
       capturedCandidateCount,
     });
     await updateDiagnostics(tabId, payload);
@@ -622,6 +592,16 @@
         variantInfo: (candidate.variantInfo || []).map(item => Object.assign({}, item)),
         trackInfo: (candidate.trackInfo || []).map(item => Object.assign({}, item)),
         durationMs: Number(candidate.durationMs || 0),
+        contentType: candidate.contentType || "",
+        contentLength: Number(candidate.contentLength || 0),
+        contentDisposition: candidate.contentDisposition || "",
+        source: candidate.source || "",
+        requestType: candidate.requestType || "",
+        reason: candidate.reason || "",
+        pageUrl: candidate.pageUrl || "",
+        frameUrl: candidate.frameUrl || "",
+        playbackObserved: Boolean(candidate.playbackObserved),
+        thumbnailUrl: candidate.thumbnailUrl || "",
         protectedMedia: Boolean(candidate.protectedMedia),
         encryptedAes128: Boolean(candidate.encryptedAes128),
         lowLatency: Boolean(candidate.lowLatency),
@@ -632,28 +612,34 @@
     };
   }
 
-  async function sendLogicalCandidates(tabId, requestedIds) {
-    const ids = new Set((Array.isArray(requestedIds) ? requestedIds : []).map(value => String(value || "")).filter(Boolean));
+  function requireSingleSelectedCandidate(tabId, requestedIds, targetLabel) {
+    const ids = [...new Set((Array.isArray(requestedIds) ? requestedIds : []).map(value => String(value || "")).filter(Boolean))];
+    if (ids.length !== 1) throw new Error(`Choose exactly one detected media item before sending to ${targetLabel}.`);
     const all = visibleCandidateSnapshot(tabId, MAX_CANDIDATES_PER_TAB);
-    const selected = all.filter(candidate => ids.has(String(candidate.logicalMediaId || candidate.stableMediaId || "")));
-    if (!selected.length) throw new Error("Choose at least one detected media item before sending to XDM.");
+    const selected = all.filter(candidate => ids[0] === String(candidate.logicalMediaId || candidate.stableMediaId || ""));
+    if (selected.length !== 1) throw new Error("The selected media item is no longer available. Refresh the media list and choose it again.");
+    return selected[0];
+  }
+
+  async function sendLogicalCandidates(tabId, requestedIds) {
+    const selected = requireSingleSelectedCandidate(tabId, requestedIds, "XDM");
     let tab;
     try { tab = await browser.tabs.get(Number(tabId)); } catch (_) { tab = null; }
     if (!tab || !/^https?:/i.test(tab.url || "")) throw new Error("The source tab is no longer available.");
     if (!tabAllowed(tab.url)) throw new Error("This site is disabled by XDM site-mode settings.");
     const session = captureSessionFor(tabId);
-    session.revision = Math.max(Number(session.revision || 0), ...selected.map(item => Number(item.sessionRevision || 0)), Date.now());
+    session.revision = Math.max(Number(session.revision || 0), Number(selected.sessionRevision || 0), Date.now());
     const handoff = globalThis.XdmHandoffV1;
     if (!handoff || typeof handoff.buildCaptureSession !== "function") throw new Error("XDM handoff builder is unavailable.");
-    const candidates = selected.slice(0, MAX_HANDOFF_CANDIDATES).map(item => Object.assign({}, item, { streamKind: candidateStreamKind(item) }));
+    const candidate = Object.assign({}, selected, { streamKind: candidateStreamKind(selected) });
     const link = await handoff.buildCaptureSession({
       sessionId: session.id,
       revision: session.revision,
       pageUrl: tab.url,
-      title: tab.title || "Detected media",
-      candidates,
-      totalCandidateCount: selected.length,
-      truncated: selected.length > candidates.length,
+      title: tab.title || selected.title || "Detected media",
+      candidates: [candidate],
+      totalCandidateCount: 1,
+      truncated: false,
       scheme: globalThis.XdmExtensionConfig && globalThis.XdmExtensionConfig.xdmScheme,
     });
     if (!link) throw new Error("XDM could not build a handoff for the selected media.");
@@ -662,7 +648,30 @@
       frameId: 0,
       runAt: "document_idle"
     });
-    return { ok: true, sentCount: candidates.length, selectedCount: selected.length, sessionId: session.id, revision: session.revision };
+    return { ok: true, sentCount: 1, selectedCount: 1, sessionId: session.id, revision: session.revision };
+  }
+
+  async function sendLogicalCandidatesToOneDm(tabId, requestedIds) {
+    const selected = requireSingleSelectedCandidate(tabId, requestedIds, "1DM+");
+    let tab;
+    try { tab = await browser.tabs.get(Number(tabId)); } catch (_) { tab = null; }
+    if (!tab || !/^https?:/i.test(tab.url || "")) throw new Error("The source tab is no longer available.");
+    if (!tabAllowed(tab.url)) throw new Error("This site is disabled by XDM site-mode settings.");
+    const handoff = globalThis.XdmHandoffV1;
+    if (!handoff || typeof handoff.buildOneDm !== "function") throw new Error("1DM+ handoff builder is unavailable.");
+    const link = handoff.buildOneDm({
+      url: selected.canonicalUrl || CORE.logicalMediaUrl(selected.url),
+      pageUrl: tab.url,
+      title: tab.title || selected.title || "Detected media",
+      contentType: selected.contentType || selected.mimeType || "",
+    });
+    if (!link) throw new Error("1DM+ could not build a handoff for the selected media.");
+    await browser.tabs.executeScript(Number(tabId), {
+      code: `(() => { location.href = ${JSON.stringify(link)}; return true; })();`,
+      frameId: 0,
+      runAt: "document_idle"
+    });
+    return { ok: true, sentCount: 1, selectedCount: 1, mode: "single" };
   }
 
   function updateBadge(tabId) {
@@ -683,6 +692,10 @@
       if (message && message.type === SEND_LOGICAL_CANDIDATES_TYPE) {
         const tabId = Number(message.tabId != null ? message.tabId : sender && sender.tab && sender.tab.id);
         return sendLogicalCandidates(tabId, message.logicalMediaIds).catch(error => ({ ok: false, error: error && error.message ? error.message : String(error) }));
+      }
+      if (message && message.type === SEND_LOGICAL_CANDIDATES_1DM_TYPE) {
+        const tabId = Number(message.tabId != null ? message.tabId : sender && sender.tab && sender.tab.id);
+        return sendLogicalCandidatesToOneDm(tabId, message.logicalMediaIds).catch(error => ({ ok: false, error: error && error.message ? error.message : String(error) }));
       }
     } catch (error) {
       publishStatus({ lastError: error && error.message ? error.message : String(error), lastErrorAt: Date.now() });

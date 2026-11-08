@@ -270,8 +270,34 @@
   // Compatibility symbol for old tests/callers in the same source tree. New XPIs do not encrypt.
   async function buildEncryptedCaptureSession(input = {}) { return buildCaptureSession(input); }
 
+  function encodeIntentString(value) {
+    return encodeURIComponent(String(value || ""));
+  }
+
   function buildOneDm(input = {}) {
-    const url = safeHttpUrl(input.url); return url ? `idmdownload:${encodeSchemeData(url)}` : "idmdownload:";
+    const url = safeHttpUrl(input.url);
+    if (!url) return "";
+
+    // 1DM accepts Android intent URI string extras for the suggested filename and
+    // referring page. Supplying both title and extra_filename keeps compatibility
+    // with the receiver variants present in 1DM+ while preserving the media URL as
+    // the actual download target.
+    const filename = cleanFilename(input.title, url, input.mimeType || input.contentType);
+    const pageUrl = safeHttpUrl(input.pageUrl || input.tabUrl || "");
+    const parts = [
+      `intent:${encodeSchemeData(url)}#Intent`,
+      "scheme=idmdownload",
+      "package=idm.internet.download.manager.plus",
+    ];
+    if (filename) {
+      const encodedFilename = encodeIntentString(filename);
+      parts.push(`S.title=${encodedFilename}`);
+      parts.push(`S.extra_filename=${encodedFilename}`);
+      parts.push(`S.com.android.extra.filename=${encodedFilename}`);
+    }
+    if (pageUrl) parts.push(`S.extra_referer=${encodeIntentString(pageUrl)}`);
+    parts.push("end");
+    return parts.join(";");
   }
   function buildTargets(input = {}) {
     return Object.freeze({ xdm: buildXdmAdd(input), oneDm: buildOneDm(input), filename: cleanFilename(input.title, input.url, input.mimeType) });

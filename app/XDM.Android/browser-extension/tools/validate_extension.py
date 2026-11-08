@@ -27,7 +27,7 @@ if manifest.get("content_scripts", [{}])[0].get("all_frames") is not True: error
 popup = (root / "popup.html").read_text(encoding="utf-8") if (root / "popup.html").is_file() else ""
 if re.search(r"(?:xdmdownload|idmdownload|1dmdownload|intent):", popup, re.I): errors.append("popup must not contain custom protocol links")
 handoff = (root / "handoff.js").read_text(encoding="utf-8") if (root / "handoff.js").is_file() else ""
-for token in ("params.set(\"v\"", "params.set(\"url\"", "//capture?", "idmdownload:"):
+for token in ("params.set(\"v\"", "params.set(\"url\"", "//capture?", "scheme=idmdownload", "package=idm.internet.download.manager.plus"):
     if token not in handoff: errors.append(f"handoff missing {token}")
 for token in ("extra_cookies", "extra_authorization", "extra_headers"):
     if token in handoff: errors.append(f"credential-bearing XDM handoff token present: {token}")

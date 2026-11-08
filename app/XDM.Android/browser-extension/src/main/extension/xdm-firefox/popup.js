@@ -15,23 +15,41 @@ const BRIDGE_FILES = ["bridge-selftest.js", "generated-config.js", "handoff.js",
 let diagnosticTimer = null;
 
 let logicalCandidates = [];
+let selectedLogicalCandidateId = "";
 
-function selectedLogicalIds() {
-  return [...document.querySelectorAll('#logicalMediaCandidates input[type="checkbox"]:checked')].map(node => node.value);
+function selectedLogicalId() {
+  return selectedLogicalCandidateId;
+}
+
+function selectedCandidate() {
+  const id = selectedLogicalId();
+  return logicalCandidates.find(candidate => String(candidate.logicalMediaId || candidate.stableMediaId || "") === id) || null;
 }
 
 function updateSendSelectedButton() {
-  const button = document.getElementById("sendSelectedMedia");
-  if (!button) return;
-  const count = selectedLogicalIds().length;
-  button.textContent = `Send ${count} to XDM`;
-  button.disabled = !activeTab || count === 0;
+  const xdmButton = document.getElementById("sendSelectedMedia");
+  const oneDmButton = document.getElementById("sendSelectedMedia1Dm");
+  const candidate = selectedCandidate();
+  const enabled = Boolean(activeTab && candidate);
+  if (xdmButton) {
+    xdmButton.textContent = "Send to XDM";
+    xdmButton.disabled = !enabled;
+  }
+  if (oneDmButton) {
+    oneDmButton.textContent = "Send to 1DM+";
+    oneDmButton.disabled = !enabled;
+  }
+
+  document.querySelectorAll("#logicalMediaCandidates .candidate-row").forEach(row => {
+    const input = row.querySelector('input[type="radio"]');
+    row.dataset.selected = String(Boolean(input && input.checked));
+  });
 }
 
 function formatBytes(value) {
   const bytes = Number(value || 0);
   if (!Number.isFinite(bytes) || bytes <= 0) return "";
-  const units = ["B", "KiB", "MiB", "GiB"];
+  const units = ["B", "KiB", "MiB", "GiB", "TiB"];
   let size = bytes;
   let unit = 0;
   while (size >= 1024 && unit < units.length - 1) { size /= 1024; unit += 1; }
@@ -42,80 +60,207 @@ function formatDuration(value) {
   const ms = Number(value || 0);
   if (!Number.isFinite(ms) || ms <= 0) return "";
   const total = Math.round(ms / 1000);
-  const minutes = Math.floor(total / 60);
+  const hours = Math.floor(total / 3600);
+  const minutes = Math.floor((total % 3600) / 60);
   const seconds = total % 60;
-  return minutes ? `${minutes}m ${String(seconds).padStart(2, "0")}s` : `${seconds}s`;
+  if (hours) return `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+  return `${minutes}:${String(seconds).padStart(2, "0")}`;
+}
+
+function hostFor(value) {
+  try { return new URL(value).hostname.replace(/^www\./, ""); } catch (_) { return ""; }
+}
+
+function extensionFor(candidate) {
+  const disposition = String(candidate && candidate.contentDisposition || "");
+  const dispositionMatch = disposition.match(/filename\*?=(?:UTF-8''|["'])?[^;"']*?(\.[A-Za-z0-9]{2,8})(?:["';]|$)/i);
+  if (dispositionMatch) return dispositionMatch[1].toLowerCase();
+  try {
+    const match = new URL(candidate && candidate.url || "").pathname.match(/(\.[A-Za-z0-9]{2,8})$/);
+    if (match) return match[1].toLowerCase();
+  } catch (_) {}
+  const mime = String(candidate && candidate.contentType || "").split(";", 1)[0].trim().toLowerCase();
+  const map = {
+    "video/mp4": ".mp4", "video/webm": ".webm", "video/x-matroska": ".mkv",
+    "video/quicktime": ".mov", "audio/mpeg": ".mp3", "audio/mp4": ".m4a",
+    "audio/aac": ".aac", "audio/ogg": ".ogg", "audio/opus": ".opus",
+    "application/vnd.apple.mpegurl": ".m3u8", "application/x-mpegurl": ".m3u8",
+    "application/dash+xml": ".mpd"
+  };
+  return map[mime] || (candidate && candidate.streamKind === "hls" ? ".m3u8" : candidate && candidate.streamKind === "dash" ? ".mpd" : "");
+}
+
+function cleanDisplayFilename(title, candidate) {
+  const handoff = globalThis.XdmHandoffV1;
+  if (handoff && typeof handoff.cleanFilename === "function") {
+    return handoff.cleanFilename(title || "Detected media", candidate && candidate.url || "", candidate && candidate.contentType || "");
+  }
+  const base = String(title || "Detected media")
+    .replace(/[\\/:*?"<>|\u0000-\u001f]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/[. ]+$/g, "") || "Detected media";
+  const ext = extensionFor(candidate);
+  return ext && !base.toLowerCase().endsWith(ext) ? `${base}${ext}` : base;
+}
+
+function bestVariant(candidate) {
+  const variants = Array.isArray(candidate && candidate.variantInfo) ? candidate.variantInfo : [];
+  return variants.reduce((best, item) => {
+    const pixels = Number(item && item.width || 0) * Number(item && item.height || 0);
+    const bestPixels = Number(best && best.width || 0) * Number(best && best.height || 0);
+    const bandwidth = Number(item && (item.averageBandwidth || item.bandwidth) || 0);
+    const bestBandwidth = Number(best && (best.averageBandwidth || best.bandwidth) || 0);
+    return !best || pixels > bestPixels || (pixels === bestPixels && bandwidth > bestBandwidth) ? item : best;
+  }, null);
+}
+
+function formatBandwidth(value) {
+  const bps = Number(value || 0);
+  if (!Number.isFinite(bps) || bps <= 0) return "";
+  return bps >= 1_000_000 ? `${(bps / 1_000_000).toFixed(bps >= 10_000_000 ? 0 : 1)} Mbps` : `${Math.round(bps / 1000)} kbps`;
 }
 
 function candidateMeta(candidate) {
-  const parts = [String(candidate.streamKind || "media").toUpperCase()];
-  if (candidate.manifestRole === "master") parts.push("master playlist");
-  if (Number(candidate.variantCount || 0) > 0) parts.push(`${candidate.variantCount} variant${candidate.variantCount === 1 ? "" : "s"}`);
-  if (Number(candidate.trackCount || 0) > 0) parts.push(`${candidate.trackCount} track${candidate.trackCount === 1 ? "" : "s"}`);
+  const parts = [];
+  const kind = String(candidate.streamKind || "media").toUpperCase();
+  if (kind) parts.push(kind);
+  const mime = String(candidate.contentType || "").split(";", 1)[0].trim();
+  if (mime) parts.push(mime.replace(/^application\//, "").replace(/^video\//, "").replace(/^audio\//, "").toUpperCase());
+
+  const best = bestVariant(candidate);
+  const width = Number(best && best.width || candidate.width || 0);
+  const height = Number(best && best.height || candidate.height || 0);
+  if (width && height) parts.push(`${width}×${height}`);
+  const bandwidth = formatBandwidth(best && (best.averageBandwidth || best.bandwidth) || candidate.bandwidth);
+  if (bandwidth) parts.push(bandwidth);
+
   const duration = formatDuration(candidate.durationMs);
   if (duration) parts.push(duration);
   const size = formatBytes(candidate.contentLength);
   if (size) parts.push(size);
-  if (Number(candidate.segmentCount || 0) > 0) parts.push(`${candidate.segmentCount} part${candidate.segmentCount === 1 ? "" : "s"}`);
-  if (Number(candidate.observationCount || 0) > 1) parts.push(`${candidate.observationCount} observations`);
+  if (candidate.manifestRole === "master") parts.push("master playlist");
+  if (Number(candidate.variantCount || 0) > 0) parts.push(`${candidate.variantCount} variant${candidate.variantCount === 1 ? "" : "s"}`);
+  if (Number(candidate.trackCount || 0) > 0) parts.push(`${candidate.trackCount} track${candidate.trackCount === 1 ? "" : "s"}`);
   if (candidate.encryptedAes128) parts.push("AES-128");
-  if (candidate.protectedMedia) parts.push("protected / unsupported");
-  if (candidate.lowLatency) parts.push("LL-HLS fallback");
+  if (candidate.protectedMedia) parts.push("protected");
+  if (candidate.lowLatency) parts.push("LL-HLS");
   return parts.join(" · ");
+}
+
+function detailLine(label, value) {
+  if (!value) return null;
+  const line = document.createElement("div");
+  line.className = "candidate-detail-line";
+  const key = document.createElement("b");
+  key.textContent = `${label}: `;
+  const val = document.createElement("span");
+  val.textContent = String(value);
+  line.append(key, val);
+  return line;
 }
 
 function renderLogicalCandidates(snapshot) {
   logicalCandidates = Array.isArray(snapshot && snapshot.candidates) ? snapshot.candidates : [];
+  if (selectedLogicalCandidateId && !logicalCandidates.some(candidate => String(candidate.logicalMediaId || candidate.stableMediaId || "") === selectedLogicalCandidateId)) {
+    selectedLogicalCandidateId = "";
+  }
   const list = document.getElementById("logicalMediaCandidates");
   const summary = document.getElementById("logicalMediaSummary");
   const count = document.getElementById("logicalMediaCount");
   if (!list || !summary || !count) return;
   count.textContent = String(logicalCandidates.length);
   list.replaceChildren();
+
   if (!logicalCandidates.length) {
-    summary.textContent = "No logical media detected on this tab yet. Start playback, then refresh or rescan.";
+    summary.textContent = "No media detected on this tab yet. Start playback, then refresh or rescan.";
   } else {
     const raw = Number(snapshot.rawObservationCount || 0);
     const suppressed = Number(snapshot.suppressedSegmentCount || 0);
-    summary.textContent = `${logicalCandidates.length} logical item${logicalCandidates.length === 1 ? "" : "s"} from ${raw} observation${raw === 1 ? "" : "s"}${suppressed ? ` · ${suppressed} segment observation${suppressed === 1 ? "" : "s"} kept internal` : ""}.`;
-    for (const [index, candidate] of logicalCandidates.entries()) {
-      const label = document.createElement("label");
-      label.className = "candidate-row";
-      const checkbox = document.createElement("input");
-      checkbox.type = "checkbox";
-      checkbox.value = candidate.logicalMediaId || candidate.stableMediaId || "";
-      checkbox.checked = true;
-      checkbox.addEventListener("change", updateSendSelectedButton);
-      const copy = document.createElement("span");
+    summary.textContent = `${logicalCandidates.length} media item${logicalCandidates.length === 1 ? "" : "s"}. Choose exactly one to send.${raw ? ` ${raw} network/page observations grouped.` : ""}${suppressed ? ` ${suppressed} segment observation${suppressed === 1 ? "" : "s"} kept internal.` : ""}`;
+
+    logicalCandidates.forEach((candidate, index) => {
+      const id = String(candidate.logicalMediaId || candidate.stableMediaId || `candidate-${index}`);
+      const row = document.createElement("div");
+      row.className = "candidate-row";
+      row.dataset.selected = String(id === selectedLogicalCandidateId);
+
+      const radio = document.createElement("input");
+      radio.type = "radio";
+      radio.name = "logicalMediaCandidate";
+      radio.id = `logical-media-${index}`;
+      radio.value = id;
+      radio.checked = id === selectedLogicalCandidateId;
+      radio.addEventListener("change", () => {
+        if (!radio.checked) return;
+        selectedLogicalCandidateId = id;
+        updateSendSelectedButton();
+      });
+
+      const copy = document.createElement("div");
       copy.className = "candidate-copy";
-      const title = document.createElement("span");
+      const title = document.createElement("label");
       title.className = "candidate-title";
+      title.htmlFor = radio.id;
       title.textContent = candidate.title || `Detected media ${index + 1}`;
-      const meta = document.createElement("span");
+
+      const meta = document.createElement("div");
       meta.className = "candidate-meta";
-      meta.textContent = candidateMeta(candidate);
+      meta.textContent = candidateMeta(candidate) || "Media metadata unavailable";
+
+      const source = document.createElement("div");
+      source.className = "candidate-source";
+      const host = hostFor(candidate.url);
+      const sourceParts = [host, candidate.source, candidate.requestType].filter(Boolean);
+      source.textContent = sourceParts.join(" · ");
+
       const details = document.createElement("details");
       details.className = "candidate-details";
       const detailsSummary = document.createElement("summary");
-      detailsSummary.textContent = "Details";
+      detailsSummary.textContent = "Media metadata";
       const detailsBody = document.createElement("div");
       detailsBody.className = "candidate-details-body";
-      const canonical = document.createElement("div");
-      canonical.className = "candidate-url";
-      canonical.textContent = candidate.url || "";
-      const provenance = document.createElement("div");
-      provenance.className = "candidate-provenance";
-      provenance.textContent = [
-        candidate.reason ? `Evidence: ${candidate.reason}` : "",
-        Number(candidate.confidence || 0) > 0 ? `Confidence: ${candidate.confidence}` : "",
-        candidate.quality ? `Quality: ${candidate.quality}` : ""
-      ].filter(Boolean).join(" · ");
-      detailsBody.append(canonical, provenance);
+
+      const suggestedTitle = activeTab && activeTab.title ? activeTab.title : candidate.title;
+      const best = bestVariant(candidate);
+      const resolution = best && best.width && best.height ? `${best.width}×${best.height}` : "";
+      const codecs = best && best.codecs ? best.codecs : candidate.codecs || "";
+      const lines = [
+        detailLine("Suggested filename", cleanDisplayFilename(suggestedTitle, candidate)),
+        detailLine("Type", candidate.streamKind ? String(candidate.streamKind).toUpperCase() : "Media"),
+        detailLine("MIME", candidate.contentType),
+        detailLine("Resolution", resolution),
+        detailLine("Bitrate", formatBandwidth(best && (best.averageBandwidth || best.bandwidth) || candidate.bandwidth)),
+        detailLine("Codecs", codecs),
+        detailLine("Duration", formatDuration(candidate.durationMs)),
+        detailLine("Size", formatBytes(candidate.contentLength)),
+        detailLine("Variants", Number(candidate.variantCount || 0) || ""),
+        detailLine("Tracks", Number(candidate.trackCount || 0) || ""),
+        detailLine("Segments observed", Number(candidate.segmentCount || 0) || ""),
+        detailLine("Source", candidate.source),
+        detailLine("Request type", candidate.requestType),
+        detailLine("Quality", candidate.quality),
+        detailLine("Confidence", Number(candidate.confidence || 0) > 0 ? candidate.confidence : ""),
+        detailLine("Evidence", candidate.reason),
+        detailLine("Page", candidate.pageUrl || (activeTab && activeTab.url)),
+        detailLine("Frame", candidate.frameUrl),
+        detailLine("Media URL", candidate.url),
+      ].filter(Boolean);
+      detailsBody.append(...lines);
       details.append(detailsSummary, detailsBody);
-      copy.append(title, meta, details);
-      label.append(checkbox, copy);
-      list.append(label);
-    }
+
+      copy.append(title, meta);
+      if (source.textContent) copy.append(source);
+      copy.append(details);
+      row.append(radio, copy);
+      row.addEventListener("click", event => {
+        if (event.target.closest("details") || event.target === radio || event.target.closest("label")) return;
+        selectedLogicalCandidateId = id;
+        radio.checked = true;
+        updateSendSelectedButton();
+      });
+      list.append(row);
+    });
   }
   updateSendSelectedButton();
 }
@@ -135,20 +280,31 @@ async function refreshLogicalCandidates() {
   }
 }
 
-async function sendSelectedLogicalCandidates() {
+async function sendSelectedLogicalCandidate(target) {
   if (!activeTab || typeof activeTab.id !== "number") return;
-  const ids = selectedLogicalIds();
-  if (!ids.length) return;
-  const button = document.getElementById("sendSelectedMedia");
+  const id = selectedLogicalId();
+  if (!id) {
+    setStatus("Choose one media item first.", "error");
+    return;
+  }
+  const isOneDm = target === "1dm";
+  const button = document.getElementById(isOneDm ? "sendSelectedMedia1Dm" : "sendSelectedMedia");
   if (button) button.disabled = true;
   try {
-    const result = await browser.runtime.sendMessage({ type: "xdmSendLogicalCandidatesV2", tabId: activeTab.id, logicalMediaIds: ids });
-    if (!result || result.ok !== true) throw new Error(result && result.error || "XDM handoff failed");
-    setStatus(`Sent ${result.sentCount} selected media item${result.sentCount === 1 ? "" : "s"} to XDM.`, "ok");
+    const result = await browser.runtime.sendMessage({
+      type: isOneDm ? "xdmSendLogicalCandidatesTo1DmV1" : "xdmSendLogicalCandidatesV2",
+      tabId: activeTab.id,
+      logicalMediaIds: [id]
+    });
+    if (!result || result.ok !== true) throw new Error(result && result.error || `${isOneDm ? "1DM+" : "XDM"} handoff failed`);
+    setStatus(`Sent the selected media item to ${isOneDm ? "1DM+" : "XDM"}.`, "ok");
   } catch (error) {
     setStatus(error && error.message ? error.message : String(error), "error");
   } finally { updateSendSelectedButton(); }
 }
+
+async function sendSelectedLogicalCandidates() { return sendSelectedLogicalCandidate("xdm"); }
+async function sendSelectedLogicalCandidatesToOneDm() { return sendSelectedLogicalCandidate("1dm"); }
 
 function setStatus(message, kind = "") {
   const node = document.getElementById("status");
@@ -426,3 +582,4 @@ document.getElementById("rescan").addEventListener("click", async () => {
 
 document.getElementById("refreshCapturedMedia").addEventListener("click", refreshLogicalCandidates);
 document.getElementById("sendSelectedMedia").addEventListener("click", sendSelectedLogicalCandidates);
+document.getElementById("sendSelectedMedia1Dm").addEventListener("click", sendSelectedLogicalCandidatesToOneDm);

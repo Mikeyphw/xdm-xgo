@@ -101,6 +101,9 @@ jobs:
       - name: HF20 aria2 launch configuration lifecycle regression
         working-directory: .
         run: python3 -B scripts/test_xgo_hf20_aria2_launch_config.py
+      - name: XP01 XPI v1.6.1 authored parity gate
+        working-directory: .
+        run: python3 -B scripts/test_xgo_xpi_v161_parity.py
       - name: Post-DL03 final common validation
         run: bash tools/run-final-common-validation.sh
       - name: Verify pinned FFmpeg and FFprobe in the debug APK (source attestation and 16 KiB)

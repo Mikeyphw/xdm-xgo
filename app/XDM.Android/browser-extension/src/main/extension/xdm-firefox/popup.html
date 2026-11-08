@@ -8,7 +8,7 @@
 </head>
 <body>
   <h1>XDM media bridge</h1>
-  <p>Detects media across page frames and places a themed XDM app-link FAB inside the webpage.</p>
+  <p>Detects media across page frames. Open this popup, inspect the media metadata, choose one item, then send it to XDM or 1DM+.</p>
 
   <section class="card">
     <label><input id="enabled" type="checkbox"> Enable detector</label>
@@ -37,10 +37,13 @@
       <strong>Captured media</strong>
       <span id="logicalMediaCount" class="count-pill">0</span>
     </div>
-    <p class="hint">XDM groups manifests, variants, repeated requests, and segments into logical media items. Choose exactly what should be handed to the app.</p>
+    <p class="hint">The bridge groups manifests, variants, repeated requests, and segments into logical media items. Review the metadata and choose exactly one item to send.</p>
     <div id="logicalMediaSummary" class="host">No logical media detected on this tab yet.</div>
-    <div id="logicalMediaCandidates" class="candidate-list" role="group" aria-label="Detected logical media"></div>
-    <button id="sendSelectedMedia" disabled>Send 0 to XDM</button>
+    <div id="logicalMediaCandidates" class="candidate-list" role="radiogroup" aria-label="Detected media — choose one"></div>
+    <div class="candidate-actions">
+      <button id="sendSelectedMedia" disabled>Send to XDM</button>
+      <button id="sendSelectedMedia1Dm" class="secondary" disabled>Send to 1DM+</button>
+    </div>
     <button id="refreshCapturedMedia" class="secondary" disabled>Refresh captured media</button>
   </section>
 
@@ -81,6 +84,7 @@
 
   <div id="status" class="status"></div>
   <script src="generated-config.js"></script>
+  <script src="handoff.js"></script>
   <script src="popup.js"></script>
 </body>
 </html>

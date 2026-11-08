@@ -4,7 +4,7 @@ package com.mikeyphw.xdm.android.browserextension
 object BrowserExtensionSourceContract {
     const val ContractVersion = 3
     const val ExtensionId = "xdm-android-media-bridge@mikeyphw"
-    const val DevelopmentVersion = "1.3.0"
+    const val DevelopmentVersion = "1.6.1"
     const val DefaultApplicationId = "com.mikeyphw.xdm.android"
     const val DefaultScheme = "xdmdownload"
     const val BodyInspectionLimitBytes = 786_432

@@ -329,11 +329,12 @@ ${location.href}`;
         // Detected media uses the direct v3 locator contract. Manual/page/probe actions may
         // still use the separate add?v=1 contract.
         xdm: input.prebuiltXdmLink || (allowDirectAdd ? builtLinks.xdm : ""),
-        oneDm: builtLinks.oneDm,
+        oneDm: input.prebuiltOneDmLink || builtLinks.oneDm,
         filename: builtLinks.filename,
       });
-      if (!links || (!links.xdm && !links.oneDm)) throw new Error("Launcher URL generation failed.");
-      if (target === "xdm" && !links.xdm) {
+      const pickerRequired = Boolean(input.pickerRequired || input.chooserRequired);
+      if (!pickerRequired && (!links || (!links.xdm && !links.oneDm))) throw new Error("Launcher URL generation failed.");
+      if (!pickerRequired && target === "xdm" && !links.xdm) {
         throw new Error("XDM capture handoff is unavailable for this candidate.");
       }
       const launcherInput = {
@@ -341,6 +342,8 @@ ${location.href}`;
         target,
         links,
         candidateCount: Math.max(1, Number(input.candidateCount || candidates.size || 1)),
+        pickerRequired,
+        chooserRequired: pickerRequired,
         streamKind: input.streamKind || globalThis.XdmHandoffV1.mediaKind(url, contentType),
         label: isProbe ? "Test Android app links" : (input.label || "Media ready")
       };
@@ -423,7 +426,13 @@ ${location.href}`;
     const possible = input.quality === "possible";
     const highConfidence = Boolean(!possible && (input.manifest || input.playbackObserved || Number(input.rank || input.confidence || 0) >= 850));
     const possibleAllowed = Boolean(possible && settings.showPossibleMediaCandidates === true && Number(input.rank || input.confidence || 0) >= 700);
-    if (!playback.offered && input.displayFallback && (input.autoOffer || highConfidence || possibleAllowed) && document.visibilityState !== "hidden") {
+    const pickerRequired = Boolean(input.pickerRequired || input.chooserRequired);
+    // A background offer is authoritative: when it asks for the single-choice picker,
+    // render that picker even if evaluateAllVideos() successfully reported playback back
+    // to the background. "playback.offered" means the candidate was reported, not that a
+    // visible FAB was rendered.
+    const shouldRender = pickerRequired || (!playback.offered && input.displayFallback && (input.autoOffer || highConfidence || possibleAllowed));
+    if (shouldRender && document.visibilityState !== "hidden") {
       return showLauncher({
         url,
         title: input.title || document.title,
@@ -438,7 +447,10 @@ ${location.href}`;
         sessionRevision: input.sessionRevision || Date.now(),
         frameUrl: input.frameUrl || "",
         prebuiltXdmLink: input.prebuiltXdmLink || "",
+        prebuiltOneDmLink: input.prebuiltOneDmLink || "",
         candidateCount: Math.max(1, Number(input.candidateCount || candidates.size || 1)),
+        pickerRequired,
+        chooserRequired: pickerRequired,
         streamKind: input.streamKind || (input.manifest ? (/\.mpd(?:$|[?#])/i.test(url) ? "dash" : "hls") : "")
       });
     }
@@ -703,7 +715,7 @@ ${location.href}`;
       const playback = evaluateAllVideos();
       return Object.freeze({ ok: true, playback, health: dependencyHealth() });
     },
-    version: "1.3.0"
+    version: "1.6.1"
   });
 
   // Initial instrumentation is intentionally deferred until browser.storage settings have
