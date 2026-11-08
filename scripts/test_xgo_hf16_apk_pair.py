@@ -13,7 +13,7 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'scripts'))
-from xgo_hf16_apk_pair import ensure_elf_16k_arm64, verify, publish  # noqa: E402
+from xgo_hf16_apk_pair import ensure_elf_16k_arm64, verify, publish, instrumentation_identity  # noqa: E402
 
 
 def elf(align: int = 16384) -> bytes:
@@ -44,11 +44,17 @@ class PairContracts(unittest.TestCase):
         aapt = self.folder / 'aapt'
         aapt.write_text('''#!/usr/bin/env python3
 import sys
-if 'androidTest' in sys.argv[-1]:
-    print("package: name='com.mikeyphw.xdm.android.debug.test' versionCode='22'")
-    print("instrumentation: name='androidx.test.runner.AndroidJUnitRunner' targetPackage='com.mikeyphw.xdm.android.debug'")
+if 'xmltree' in sys.argv:
+    print('E: manifest (line=2)')
+    print('  E: instrumentation (line=9)')
+    print('    A: android:label(0x01010001)="XDM tests" (Raw: "XDM tests")')
+    print('    A: android:name(0x01010003)="androidx.test.runner.AndroidJUnitRunner" (Raw: "androidx.test.runner.AndroidJUnitRunner")')
+    print('    A: android:targetPackage(0x01010021)="com.mikeyphw.xdm.android.debug" (Raw: "com.mikeyphw.xdm.android.debug")')
 else:
-    print("package: name='com.mikeyphw.xdm.android.debug' versionCode='22'")
+    if 'androidTest' in sys.argv[-1]:
+        print("package: name='com.mikeyphw.xdm.android.debug.test' versionCode='22'")
+    else:
+        print("package: name='com.mikeyphw.xdm.android.debug' versionCode='22'")
 ''')
         aapt.chmod(0o755)
         self.aapt = str(aapt)
@@ -66,16 +72,44 @@ else:
         with self.assertRaisesRegex(ValueError, 'ARM64_JNI_MISSING'):
             verify(self.app, self.test, self.aapt)
 
+    def test_badging_without_instrumentation_uses_xmltree(self):
+        self.assertEqual(verify(self.app, self.test, self.aapt)['target_package'],
+                         'com.mikeyphw.xdm.android.debug')
+
     def test_wrong_test_target_is_refused(self):
-        Path(self.aapt).write_text('''#!/usr/bin/env python3
-import sys
-if 'androidTest' in sys.argv[-1]:
- print("package: name='com.mikeyphw.xdm.android.debug.test'")
- print("instrumentation: name='androidx.test.runner.AndroidJUnitRunner' targetPackage='com.example.other'")
-else:
- print("package: name='com.mikeyphw.xdm.android.debug'")
-''')
+        mock = Path(self.aapt).read_text()
+        mock = mock.replace('android:targetPackage(0x01010021)="com.mikeyphw.xdm.android.debug"',
+                            'android:targetPackage(0x01010021)="com.example.other"')
+        Path(self.aapt).write_text(mock)
         with self.assertRaisesRegex(ValueError, 'TARGET_OR_RUNNER_MISMATCH'):
+            verify(self.app, self.test, self.aapt)
+
+    def test_wrong_instrumentation_runner_is_refused(self):
+        mock = Path(self.aapt).read_text()
+        mock = mock.replace('android:name(0x01010003)="androidx.test.runner.AndroidJUnitRunner"',
+                            'android:name(0x01010003)="com.example.InsecureRunner"')
+        Path(self.aapt).write_text(mock)
+        with self.assertRaisesRegex(ValueError, 'TARGET_OR_RUNNER_MISMATCH'):
+            verify(self.app, self.test, self.aapt)
+
+    def test_missing_or_duplicate_instrumentation_is_refused(self):
+        original = Path(self.aapt).read_text()
+        # Preserve original output with a valid instrumentation, then add another.
+        duplicate = original.replace("print('  E: instrumentation (line=9)')",
+                     "print('  E: instrumentation (line=9)')\n    print('  E: instrumentation (line=10)')")
+        Path(self.aapt).write_text(duplicate)
+        with self.assertRaisesRegex(ValueError, 'INSTRUMENTATION_COUNT_INVALID'):
+            verify(self.app, self.test, self.aapt)
+        Path(self.aapt).write_text(original.replace("print('  E: instrumentation (line=9)')",
+                                                         "print('  E: application (line=9)')"))
+        with self.assertRaisesRegex(ValueError, 'INSTRUMENTATION_COUNT_INVALID'):
+            verify(self.app, self.test, self.aapt)
+
+    def test_xmltree_tool_failure_refused(self):
+        original = Path(self.aapt).read_text()
+        Path(self.aapt).write_text(original.replace("if 'xmltree' in sys.argv:",
+                                                         "if 'xmltree' in sys.argv:\n    sys.exit(23)"))
+        with self.assertRaisesRegex(ValueError, 'XMLTREE_FAILED'):
             verify(self.app, self.test, self.aapt)
 
     def test_publish_receipt_and_checksum_are_source_bound(self):

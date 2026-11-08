@@ -47,6 +47,47 @@ def identity(src: str) -> str:
     return match.group(1)
 
 
+def instrumentation_identity(aapt: str, apk: Path) -> tuple[str, str]:
+    """Read instrumentation from the compiled manifest, not badging.
+
+    `aapt dump badging` does not reliably expose instrumentation attributes.
+    Require one complete <instrumentation> element in the test APK's xmltree.
+    """
+    p = subprocess.run((aapt, 'dump', 'xmltree', str(apk), 'AndroidManifest.xml'),
+                       capture_output=True, text=True)
+    if p.returncode:
+        raise ValueError('XGO_PAIR_XMLTREE_FAILED:' + apk.name + ':' + p.stderr[:160])
+    records: list[dict[str, str]] = []
+    current: dict[str, str] | None = None
+    for line in p.stdout.splitlines():
+        # E: is an XML element; only attributes directly beneath instrumentation
+        # count, never a matching value in an unrelated element or a nested tag.
+        element = re.match(r'^\s*E:\s+([^\s(]+)', line)
+        if element:
+            if current is not None:
+                records.append(current)
+                current = None
+            if element.group(1) == 'instrumentation':
+                current = {}
+            continue
+        if current is None:
+            continue
+        attr = re.match(r'^\s*A:\s+android:(name|targetPackage)\(0x[0-9a-fA-F]+\)="([^"]*)"', line)
+        if attr:
+            key, value = attr.groups()
+            if key in current:
+                raise ValueError('XGO_PAIR_DUPLICATE_INSTRUMENTATION_ATTRIBUTE')
+            current[key] = value
+    if current is not None:
+        records.append(current)
+    if len(records) != 1:
+        raise ValueError('XGO_PAIR_INSTRUMENTATION_COUNT_INVALID:' + str(len(records)))
+    result = records[0]
+    if result.get('name') != RUNNER or result.get('targetPackage') != APP_ID:
+        raise ValueError('XGO_PAIR_INSTRUMENTATION_TARGET_OR_RUNNER_MISMATCH')
+    return result['name'], result['targetPackage']
+
+
 def ensure_elf_16k_arm64(blob: bytes) -> None:
     if len(blob) < 64 or blob[:4] != b'\x7fELF' or blob[4] != 2 or blob[5] != 1:
         raise ValueError('XGO_PAIR_JNI_ELF64_LE_INVALID')
@@ -96,8 +137,7 @@ def verify(app: Path, test: Path, aapt: str) -> dict:
     app_id, test_id = identity(main_badging), identity(test_badging)
     if app_id != APP_ID or test_id != TEST_ID:
         raise ValueError(f'XGO_PAIR_PACKAGE_ID_MISMATCH:{app_id}:{test_id}')
-    if not re.search(r"(?m)^instrumentation:\s+name='" + re.escape(RUNNER) + r"'\s+targetPackage='" + re.escape(APP_ID) + "'", test_badging):
-        raise ValueError('XGO_PAIR_INSTRUMENTATION_TARGET_OR_RUNNER_MISMATCH')
+    instrumentation_identity(aapt, test)
     return {'app_package': app_id, 'test_package': test_id, 'instrumentation_runner': RUNNER,
             'target_package': APP_ID, 'abi': 'arm64-v8a', 'jni_elf': 'EM_AARCH64',
             'jni_min_pt_load_alignment': 16384}

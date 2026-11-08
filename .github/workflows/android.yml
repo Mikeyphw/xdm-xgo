@@ -11,6 +11,7 @@ on:
       - 'build-release-apk.sh'
       - '.github/workflows/android.yml'
       - 'scripts/xgo_hf16_apk_pair.py'
+      - 'scripts/test_xgo_hf16_apk_pair.py'
       - 'scripts/test_xgo_hf15_no_firebase.py'
       - 'scripts/run_physical_arm64_instrumentation.sh'
   pull_request:
@@ -23,6 +24,7 @@ on:
       - 'build-release-apk.sh'
       - '.github/workflows/android.yml'
       - 'scripts/xgo_hf16_apk_pair.py'
+      - 'scripts/test_xgo_hf16_apk_pair.py'
       - 'scripts/test_xgo_hf15_no_firebase.py'
       - 'scripts/run_physical_arm64_instrumentation.sh'
   workflow_dispatch:
@@ -76,6 +78,9 @@ jobs:
           bash tools/run-final-release-gate.sh --ci
       - name: Bootstrap wrapper
         run: test -f gradle/wrapper/gradle-wrapper.jar || gradle wrapper --gradle-version 9.7.1
+      - name: HF17 offline APK pair regressions
+        working-directory: .
+        run: python3 -B scripts/test_xgo_hf16_apk_pair.py
       - name: Post-DL03 final common validation
         run: bash tools/run-final-common-validation.sh
       - name: Verify and stage one native ARM64 debug/instrumentation APK pair
