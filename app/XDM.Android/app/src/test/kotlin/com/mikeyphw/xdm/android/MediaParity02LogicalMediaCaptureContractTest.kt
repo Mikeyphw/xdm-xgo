@@ -37,7 +37,12 @@ class MediaParity02LogicalMediaCaptureContractTest {
         assertTrue(main.contains("candidate.logicalMediaId ?: candidate.stableMediaId"))
         assertTrue(main.contains("LogicalMediaGraphEngine.identityUrl"))
         assertTrue(envelope.contains("val logicalMediaId: String? = null"))
-        assertTrue(popup.contains("Send ${'$'}{count} to XDM"))
+        // XP01 1.6.1: one selected media ID goes to XDM or 1DM+.
+        assertTrue(popup.contains("async function sendSelectedLogicalCandidate(target)"))
+        assertTrue(popup.contains("const id = selectedLogicalId();"))
+        assertTrue(popup.contains("logicalMediaIds: [id]"))
+        assertTrue(popup.contains("sendSelectedLogicalCandidatesToOneDm"))
+        assertFalse(popup.contains("Send ${'$'}{count} to XDM"))
         assertTrue(popup.contains("logicalMediaCandidates"))
         assertTrue(store.contains("logicalMediaId"))
     }

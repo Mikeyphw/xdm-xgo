@@ -50,7 +50,7 @@ class BrowserCapturePhases59_61ContractTest {
     }
 
     @Test
-    fun firefoxTransfersBoundedEvidenceBackedCandidateSetPerReviewHandoff() {
+    fun firefoxTransfersOnlyOneExplicitlySelectedEvidenceBackedCandidatePerReviewHandoff() {
         val store = source("browser-extension/src/main/extension/xdm-firefox/candidate-store.js")
         val network = source("browser-extension/src/main/extension/xdm-firefox/network-observer.js")
         val handoff = source("browser-extension/src/main/extension/xdm-firefox/handoff.js")
@@ -60,9 +60,19 @@ class BrowserCapturePhases59_61ContractTest {
 
         assertTrue(store.contains("snapshot(tabId"))
         assertTrue(network.contains("visibleCandidateSnapshot(tabId, MAX_CANDIDATES_PER_TAB)"))
-        assertTrue(network.contains("visibleCandidates.slice(0, MAX_HANDOFF_CANDIDATES)"))
+        // XP01 1.6.1: discovery never prebuilds an unselected batch handoff.
+        assertTrue(network.contains("function requireSingleSelectedCandidate(tabId, requestedIds, targetLabel)"))
+        assertTrue(network.contains("if (ids.length !== 1)"))
+        assertTrue(network.contains("if (selected.length !== 1)"))
+        assertTrue(network.contains("const chooserRequired = true;"))
+        assertTrue(network.contains("const prebuiltXdmLink = \"\";"))
+        assertTrue(network.contains("const prebuiltOneDmLink = \"\";"))
+        assertTrue(network.contains("candidates: [candidate]"))
+        assertTrue(network.contains("totalCandidateCount: 1"))
+        assertTrue(network.contains("truncated: false"))
+        assertFalse(network.contains("visibleCandidates.slice(0, MAX_HANDOFF_CANDIDATES)"))
         assertTrue(network.contains("candidateStore.snapshot(tabId, MAX_CANDIDATES_PER_TAB)"))
-        assertTrue(network.contains("capturedCandidateCount = Math.max(0"))
+        assertTrue(network.contains("const capturedCandidateCount = 0;"))
         assertTrue(handoff.contains(".slice(0, 24)"))
         assertTrue(handoff.contains("uri.searchParams.set(\"candidates\", json)"))
         assertTrue(handoff.contains("uri.searchParams.set(\"truncated\""))

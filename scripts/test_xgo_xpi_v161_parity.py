@@ -217,6 +217,32 @@ class XpiReferenceParity(unittest.TestCase):
                 cwd=ROOT/'app/XDM.Android',capture_output=True,text=True)
             self.assertEqual(result.returncode,0,gate+'\n'+result.stdout+'\n'+result.stderr)
 
+    def test_kotlin_phase59_parity02_gate_matches_v161_explicit_single_selection(self):
+        browser=(ROOT/'app/XDM.Android/app/src/test/kotlin/com/mikeyphw/xdm/android/BrowserCapturePhases59_61ContractTest.kt').read_text()
+        parity=(ROOT/'app/XDM.Android/app/src/test/kotlin/com/mikeyphw/xdm/android/MediaParity02LogicalMediaCaptureContractTest.kt').read_text()
+        network=(SRC/'network-observer.js').read_text()
+        popup=(SRC/'popup.js').read_text()
+        for needle in (
+            'function requireSingleSelectedCandidate(tabId, requestedIds, targetLabel)',
+            'if (ids.length !== 1)', 'if (selected.length !== 1)',
+            'const chooserRequired = true;', 'candidates: [candidate]',
+            'totalCandidateCount: 1', 'truncated: false',
+            'const capturedCandidateCount = 0;',
+        ):
+            self.assertIn(needle, network)
+            self.assertIn(needle, browser)
+        self.assertNotIn('visibleCandidates.slice(0, MAX_HANDOFF_CANDIDATES)', network)
+        self.assertIn('assertFalse(network.contains("visibleCandidates.slice(0, MAX_HANDOFF_CANDIDATES)"', browser)
+        self.assertNotIn('assertTrue(network.contains("visibleCandidates.slice(0, MAX_HANDOFF_CANDIDATES)"', browser)
+        self.assertNotIn('capturedCandidateCount = Math.max(0', browser)
+        for needle in ('async function sendSelectedLogicalCandidate(target)',
+                       'const id = selectedLogicalId();', 'logicalMediaIds: [id]',
+                       'sendSelectedLogicalCandidatesToOneDm'):
+            self.assertIn(needle, popup)
+            self.assertIn(needle, parity)
+        self.assertNotIn('Send ${count} to XDM', popup)
+        self.assertIn('assertFalse(popup.contains(', parity)
+
     def test_release_boundary_is_unchanged(self):
         w=(ROOT/'.github/workflows/android.yml').read_text()
         self.assertEqual(sha(release_block(w).encode()),SIGNED_RELEASE_SHA)
