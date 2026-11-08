@@ -53,7 +53,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--source", type=Path, required=True); parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--theme-contract", type=Path); parser.add_argument("--contract-version", default="3")
-    parser.add_argument("--extension-version", default="1.3.0"); parser.add_argument("--app-version", default="0.21.0")
+    parser.add_argument("--extension-version", default="1.6.1"); parser.add_argument("--app-version", default="0.21.0")
     parser.add_argument("--application-id", default="com.mikeyphw.xdm.android")
     parser.add_argument("--channel", choices=("release","debug"), default="release")
     parser.add_argument("--xdm-scheme", default="xdmdownload"); parser.add_argument("--default-target", choices=("xdm","1dm","ask"), default="xdm")
