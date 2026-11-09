@@ -16,6 +16,8 @@ import subprocess
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 APP = ROOT / 'app/XDM.Android/app/build.gradle.kts'
+AUTHORITY = ROOT / 'app/XDM.Android/app/src/main/kotlin/com/mikeyphw/xdm/android/engine/AndroidEngineProcessAuthority.kt'
+AUTHORITY_BLOB = '8c5a0bc74f96b67dfaea4545f9bf99f4a4c451ca'
 BASE_BLOB = '7040b8359d3b2a8f31e1a1ec5c7d53aaec6bcae2'
 PAIRS = [
     ('xgoRepositoryRoot.resolve("tools/xgo/build_android_xdmcore.py")',
@@ -42,20 +44,52 @@ def transform(source: str) -> str:
     return output
 
 
+# Only a disposable, opt-in x86_64 CI checkout may change the provenance contract.
+# Production ARM64 source and its strict arch gate remain exactly as checked in.
+ARCH_PROVENANCE_SOURCE = 'require(provenance.optString("target_arch") == "arm64") { "xdmcore target arch provenance mismatch" }'
+ARCH_PROVENANCE_TEST = 'require(provenance.optString("target_arch") == "amd64") { "xdmcore target arch provenance mismatch" }'
+
+
+def transform_authority(source: str) -> str:
+    if source.count(ARCH_PROVENANCE_SOURCE) != 1 or ARCH_PROVENANCE_TEST in source:
+        raise ValueError('XGO_X86_AUTHORITY_ARCH_ANCHOR_MISMATCH')
+    return source.replace(ARCH_PROVENANCE_SOURCE, ARCH_PROVENANCE_TEST, 1)
+
+
+def git_blob(repo: pathlib.Path, target: pathlib.Path) -> str:
+    return subprocess.check_output(
+        ['git', '-C', str(repo), 'hash-object', str(target)],
+        text=True,
+    ).strip()
+
+
+def verify_source_pins(repo: pathlib.Path, app: pathlib.Path, authority: pathlib.Path) -> None:
+    for target, expected, label in (
+        (app, BASE_BLOB, 'APP_GRADLE'),
+        (authority, AUTHORITY_BLOB, 'ENGINE_AUTHORITY'),
+    ):
+        if not target.is_file() or target.is_symlink():
+            raise ValueError(f'XGO_X86_{label}_MISSING_OR_SYMLINK')
+        observed = git_blob(repo, target)
+        if observed != expected:
+            raise ValueError(f'XGO_X86_{label}_BLOB_MISMATCH:{observed}')
+
+
 def prepare(repo: pathlib.Path = ROOT) -> None:
     target = repo / APP.relative_to(ROOT)
+    authority = repo / AUTHORITY.relative_to(ROOT)
     native = repo / 'tools/xgo/build_android_xdmcore_x86_64.py'
     if not (os.environ.get('GITHUB_ACTIONS') == 'true' and os.environ.get('RUNNER_OS') == 'Linux'):
         raise ValueError('XGO_X86_PROFILE_CI_ONLY')
     if not native.is_file():
         raise ValueError('XGO_X86_NATIVE_BUILDER_MISSING')
-    source = target.read_text(encoding='utf-8')
-    sha = subprocess.check_output(['git','-C',str(repo),'hash-object',str(target)], text=True).strip()
-    if sha != BASE_BLOB:
-        raise ValueError('XGO_X86_WRONG_APP_GRADLE_BLOB:'+sha)
-    patched = transform(source)
+    # Validate both source hashes and both transformations BEFORE either write.
+    verify_source_pins(repo, target, authority)
+    patched = transform(target.read_text(encoding='utf-8'))
+    patched_authority = transform_authority(authority.read_text(encoding='utf-8'))
     target.write_text(patched, encoding='utf-8')
-    print('XGO_X86_GRADLE_PROFILE_PREPARED: original ARM64 definitions remain in Git')
+    authority.write_text(patched_authority, encoding='utf-8')
+    print('XGO_X86_GRADLE_AND_PROVENANCE_PROFILE_PREPARED: test-only amd64; production ARM64 unchanged')
 
 
 def main() -> int:
@@ -68,7 +102,8 @@ def main() -> int:
     if args.check:
         original=APP.read_text(encoding='utf-8')
         transform(original)
-        print('XGO_X86_PROFILE_SOURCE_PASS')
+        transform_authority(AUTHORITY.read_text(encoding='utf-8'))
+        print('XGO_X86_PROFILE_SOURCE_PASS: Gradle and native arch policy anchors verified')
     else:
         prepare()
     return 0
