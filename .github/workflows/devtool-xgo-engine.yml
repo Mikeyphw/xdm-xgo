@@ -1,25 +1,7 @@
 name: Devtool XGO Go engine candidate
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'engine/**'
-      - 'tools/xgo/**'
-      - 'go.work'
-      - 'scripts/devtool_phase02_source_contract.py'
-      - 'scripts/devtool_actions_contract.py'
-      - '.devtool.toml'
-      - '.github/workflows/devtool-xgo-engine.yml'
-  pull_request:
-    paths:
-      - 'engine/**'
-      - 'tools/xgo/**'
-      - 'go.work'
-      - 'scripts/devtool_phase02_source_contract.py'
-      - 'scripts/devtool_actions_contract.py'
-      - '.devtool.toml'
-      - '.github/workflows/devtool-xgo-engine.yml'
   workflow_dispatch:
+
 permissions:
   contents: read
 concurrency:

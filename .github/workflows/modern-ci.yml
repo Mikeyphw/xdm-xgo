@@ -1,10 +1,6 @@
 name: XDM Modern CI
 
 on:
-  push:
-    branches: [master, main, modern]
-  pull_request:
-    types: [opened, reopened, synchronize, labeled, unlabeled, ready_for_review]
   workflow_dispatch:
 
 permissions:

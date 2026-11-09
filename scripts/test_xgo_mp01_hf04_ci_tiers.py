@@ -25,14 +25,17 @@ def main() -> None:
     js = SECURE_TEST.read_text(encoding='utf-8')
     validator = WEB_VALIDATOR.read_text(encoding='utf-8')
 
-    check('  pull_request:\n    paths:' in wf, 'existing PR path filters removed')
+    check('  pull_request:\n' not in wf, 'full Android workflow still auto-runs on PR')
     check('types: [opened, reopened, synchronize, labeled, unlabeled, ready_for_review]' in wf,
           'label change does not trigger qualification')
-    check('  push:\n    branches: [main]\n    tags: [\'android-v*\']' in wf,
-          'default branch/release tag full qualification removed')
+    check("  push:\n    tags: ['android-v*']" in wf and 'branches: [main]' not in wf,
+          'Android main auto-build is enabled or release tag gate missing')
     check('  workflow_dispatch:' in wf, 'manual full qualification route removed')
-    check(wf.count("      - 'scripts/test_xgo_mp01_hf04_ci_tiers.py'") == 2,
-          'new CI policy test missing from both Android push/PR change filters')
+    targeted = (ROOT / ".github/workflows/xgo-targeted.yml").read_text(encoding="utf-8")
+    router = (ROOT / ".github/workflows/xgo-full-gate-router.yml").read_text(encoding="utf-8")
+    check("  pull_request:" in targeted and "  push:" in targeted, "targeted PR/main checks missing")
+    check("  targeted-qualification:" in targeted, "no distinct targeted status")
+    check("  full-gate:" in router and "gate-dispatch" in router, "full gate router missing")
     check('  hotfix-fast:\n' in wf, 'fast preflight missing')
     check('  validate:\n    needs: hotfix-fast\n' in wf,
           'heavy validation does not depend on fast preflight')
@@ -72,8 +75,8 @@ def main() -> None:
 
     # Desktop parity: Android-only hotfixes must not keep provisioning Windows
     # ARM64 compilers or building the complete .NET solution until final PR opt-in.
-    check('  pull_request:\n    types: [opened, reopened, synchronize, labeled, unlabeled, ready_for_review]' in modern,
-          'modern label-triggered qualification events missing')
+    check('  pull_request:\n' not in modern and '  push:\n' not in modern and '  workflow_dispatch:' in modern,
+          'full Modern workflow is not manual-gate only')
     check(wf.count('  android-pr-merge-qualification:') == 1 and
           modern.count('  modern-pr-merge-qualification:') == 1,
           'full qualification jobs must have unique cross-workflow names')
@@ -116,7 +119,7 @@ def main() -> None:
           'WEB01 static gate still reads obsolete public-only JS test')
     check("'batch[1].durationMs,630000'" not in validator,
           'WEB01 static gate still requires plaintext-v3 metadata')
-    print('MP01_HF04_CI_TIERS_PASS: fast checks, fail-closed xdm-full-ci opt-in, full Android/Modern Gradle/.NET/emulator preserved, encrypted metadata regression')
+    print('MP01_HF04_CI_TIERS_PASS: Aurora-style targeted PR, manual full Android/Modern jobs, five-integration gate router, encrypted metadata regression')
 
 
 if __name__ == '__main__':

@@ -1,0 +1,74 @@
+# CI05 — retained full workflows are manually dispatched only on gate dates.
+name: XGO Full Gate Router
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: xgo-periodic-full-gate
+  cancel-in-progress: false
+
+jobs:
+  gate-plan:
+    name: Calculate five-integration checkpoint and security overrides
+    runs-on: ubuntu-24.04
+    timeout-minutes: 6
+    outputs:
+      due: ${{ steps.plan.outputs.due }}
+      integrations_since_gate: ${{ steps.plan.outputs.integrations_since_gate }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - id: plan
+        name: Compute gate from exact main history
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CI_INTERVAL: ${{ vars.XGO_FULL_GATE_INTERVAL || '5' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          flags=()
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then flags+=(--force); fi
+          python3 -B scripts/ci/xgo_ci_policy.py gate-plan \
+            --head "$GITHUB_SHA" --interval "$CI_INTERVAL" \
+            --github-output "$GITHUB_OUTPUT" "${flags[@]}"
+
+  full-gate:
+    name: Four full workflows / 13 mandatory jobs on exact main SHA
+    needs: gate-plan
+    if: needs.gate-plan.outputs.due == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    permissions:
+      contents: write
+      actions: write
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+      - name: Dispatch, monitor and authenticate 13 required hosted jobs
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CI_INTERVAL: ${{ vars.XGO_FULL_GATE_INTERVAL || '5' }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$GITHUB_REF" = refs/heads/main
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          flags=()
+          if [[ "$GITHUB_EVENT_NAME" == workflow_dispatch ]]; then flags+=(--force); fi
+          python3 -B scripts/ci/xgo_ci_policy.py gate-dispatch \
+            --head "$GITHUB_SHA" --interval "$CI_INTERVAL" "${flags[@]}"

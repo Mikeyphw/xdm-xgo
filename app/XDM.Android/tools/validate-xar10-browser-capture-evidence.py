@@ -48,8 +48,10 @@ def source_contracts() -> None:
         "function evidenceKey",
         "exact URL + requestId + frame + generation",
         "clearDocumentEvidence",
-        "exactRequestUrl = sameRequest",
-        "mergedHeaders = sameRequest",
+        "const staleRequest = Boolean(previous.requestFingerprint)",
+        "const exactRequestUrl = staleRequest ? previous.url",
+        "const mergedHeaders = staleRequest ? Object.assign({}, previous.headers || {})",
+        "const mergedHandoff = staleRequest ? Object.assign({}, previous.browserHandoff || {})",
     )
     require(
         "browser-extension/src/main/extension/xdm-firefox/handoff.js",

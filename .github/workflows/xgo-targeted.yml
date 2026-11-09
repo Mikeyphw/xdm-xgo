@@ -1,0 +1,135 @@
+# CI05 — temporary targeted PR/main checks; no emulator or full OS matrix.
+name: XGO Targeted CI
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: xgo-targeted-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  scope:
+    name: Classify exact change set
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      base_sha: ${{ steps.plan.outputs.base_sha }}
+      head_sha: ${{ steps.plan.outputs.head_sha }}
+      needs_go: ${{ steps.plan.outputs.needs_go }}
+      needs_android_compile: ${{ steps.plan.outputs.needs_android_compile }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: plan
+        name: Resolve pinned base/head and classify relevant tests
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+          PR_BASE: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          base="${PR_BASE:-${PUSH_BEFORE:-}}"
+          if [[ ! "$base" =~ ^[a-f0-9]{40}$ || "$base" =~ ^0+$ ]]; then
+            base="$(git rev-parse HEAD^)"
+          fi
+          git cat-file -e "$base^{commit}"
+          python3 -B scripts/ci/xgo_ci_policy.py classify \
+            --base "$base" --head "$EXPECTED_SHA" --github-output "$GITHUB_OUTPUT"
+
+  targeted-source:
+    name: Targeted source, Firefox and security regressions
+    needs: scope
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ needs.scope.outputs.head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-go@v5
+        if: needs.scope.outputs.needs_go == 'true'
+        with:
+          go-version-file: engine/go.mod
+          cache: true
+          cache-dependency-path: engine/go.sum
+      - name: Execute classified contracts and negative tests (no local/hosted Gradle)
+        env:
+          BASE_SHA: ${{ needs.scope.outputs.base_sha }}
+          HEAD_SHA: ${{ needs.scope.outputs.head_sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          python3 -B scripts/ci/xgo_ci_policy.py run-targeted \
+            --base "$BASE_SHA" --head "$HEAD_SHA"
+
+  targeted-android:
+    name: Android Kotlin compile only (when Android source changes)
+    needs: scope
+    if: needs.scope.outputs.needs_android_compile == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ needs.scope.outputs.head_sha }}
+          persist-credentials: false
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Compile only target Kotlin (not emulator, full suite or release)
+        shell: bash
+        working-directory: app/XDM.Android
+        run: |
+          set -euo pipefail
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+          test "$(git rev-parse HEAD)" = '${{ needs.scope.outputs.head_sha }}'
+          ./gradlew --no-daemon --max-workers=2 :app:compileDebugKotlin
+
+  targeted-qualification:
+    name: XGO targeted checks passed (NOT full qualification)
+    if: always()
+    needs: [scope, targeted-source, targeted-android]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require all applicable checks on this exact PR head
+        env:
+          SCOPE: ${{ needs.scope.result }}
+          SOURCE: ${{ needs.targeted-source.result }}
+          ANDROID: ${{ needs.targeted-android.result }}
+          NEEDS_ANDROID: ${{ needs.scope.outputs.needs_android_compile }}
+          HEAD_SHA: ${{ needs.scope.outputs.head_sha }}
+          EXPECTED_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$SCOPE" = success
+          test "$SOURCE" = success
+          test "$HEAD_SHA" = "$EXPECTED_SHA"
+          if [[ "$NEEDS_ANDROID" == true ]]; then
+            test "$ANDROID" = success
+          else
+            test "$ANDROID" = skipped
+          fi
+          echo 'XGO_TARGETED_PASS: source-bound tests passed; this is not full CI, release, or physical ARM64 qualification'
