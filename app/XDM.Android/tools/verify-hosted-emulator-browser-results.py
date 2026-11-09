@@ -15,7 +15,7 @@ EXPECTED = frozenset({
     'releaseSchemeCannotEnterDebugReceiver',
     'releaseSchemeResolvesOnlyReleaseParser',
     'v2EncryptedCaptureHasNoPlaintextUrl',
-    'v3DirectSessionRetainsBoundedCandidateContext',
+    'v3PlaintextCaptureIsRejectedEvenWithCandidateContext',
     'duplicateUrlParameterFailsClosed',
     'unsafeNestedUrlFailsClosed',
     'unknownHostFailsClosed',

@@ -54,15 +54,21 @@ class XdmBrowserIntentFrameworkInstrumentedTest {
         assertNull(payload.rawHeaders)
     }
 
-    @Test fun v3DirectSessionRetainsBoundedCandidateContext() {
+    @Test fun v3PlaintextCaptureIsRejectedEvenWithCandidateContext() {
+        // MP01: browser navigation must never carry plaintext capture candidates,
+        // including signed URLs and executable Authorization/Cookie headers.
         val candidates = "[{\"url\":\"https://example.test/clip.mp4\"}]"
-        val uri = delivered("xdmdownload://capture?v=3&url=${encoded("https://example.test/clip.mp4")}&candidates=${encoded(candidates)}&sid=browser-session-8")
-        val result = XdmBrowserDeepLinkParser.parseDetailed(uri, XdmBrowserDeepLinkContract.ReleaseScheme)
-        val payload = (result as XdmBrowserDeepLinkParseResult.Accepted).payload
-        assertTrue(payload.hasDirectCaptureSession)
-        assertEquals("browser-session-8", payload.captureSessionId)
-        assertEquals(candidates, payload.directCandidatesJson)
-        assertFalse(payload.hasEncryptedCaptureEnvelope)
+        for (scheme in listOf(XdmBrowserDeepLinkContract.ReleaseScheme, XdmBrowserDeepLinkContract.DebugScheme)) {
+            val uri = delivered("$scheme://capture?v=3&url=${encoded("https://example.test/clip.mp4")}&candidates=${encoded(candidates)}&sid=browser-session-8")
+            val result = XdmBrowserDeepLinkParser.parseDetailed(uri, scheme)
+            assertEquals(XdmBrowserDeepLinkRejection.UnsafeEnvelope, (result as XdmBrowserDeepLinkParseResult.Rejected).reason)
+            assertNull(XdmBrowserDeepLinkParser.parse(uri, scheme))
+
+            val credentialed = delivered("$scheme://capture?v=3&url=${encoded("https://example.test/clip.mp4?token=secret")}&finalHeaders=${encoded("Authorization: Bearer private\nCookie: sid=secret")}")
+            val privateResult = XdmBrowserDeepLinkParser.parseDetailed(credentialed, scheme)
+            assertEquals(XdmBrowserDeepLinkRejection.UnsafeEnvelope, (privateResult as XdmBrowserDeepLinkParseResult.Rejected).reason)
+            assertNull(XdmBrowserDeepLinkParser.parse(credentialed, scheme))
+        }
     }
 
     @Test fun duplicateUrlParameterFailsClosed() {

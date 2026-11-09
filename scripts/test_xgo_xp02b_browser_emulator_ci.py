@@ -38,7 +38,16 @@ class BrowserEmulatorGateTests(unittest.TestCase):
         self.assertIn('XdmBrowserDeepLinkParser.parseDetailed', kotlin)
         self.assertIn('Intent(Intent.ACTION_VIEW, Uri.parse(uri))', kotlin)
         self.assertIn('VariantMismatch', kotlin)
-        self.assertIn('hasDirectCaptureSession', kotlin)
+        self.assertNotIn('hasDirectCaptureSession', kotlin)
+        self.assertIn('v3PlaintextCaptureIsRejectedEvenWithCandidateContext', kotlin)
+        self.assertIn('XdmBrowserDeepLinkRejection.UnsafeEnvelope', kotlin)
+        self.assertIn('assertNull(XdmBrowserDeepLinkParser.parse(uri, scheme))', kotlin)
+        self.assertIn('assertNull(XdmBrowserDeepLinkParser.parse(credentialed, scheme))', kotlin)
+        parser = (ROOT / 'app/XDM.Android/browser-integration/src/main/kotlin/com/mikeyphw/xdm/android/browser/XdmBrowserDeepLinkParser.kt').read_text()
+        self.assertIn('XdmBrowserDeepLinkContract.EncryptedCaptureVersion -> parseEncryptedCaptureEnvelope', parser)
+        self.assertRegex(parser, r'XdmBrowserDeepLinkContract\.CurrentVersion\s*->\s*XdmBrowserDeepLinkParseResult\.Rejected\(XdmBrowserDeepLinkRejection\.UnsafeEnvelope\)')
+        self.assertNotIn('v3DirectSessionRetainsBoundedCandidateContext', kotlin)
+        self.assertNotIn('v3DirectSessionRetainsBoundedCandidateContext', obj.EXPECTED)
         self.assertIn('hasEncryptedCaptureEnvelope', kotlin)
 
     def test_emulator_lane_is_native_free_and_original_room_lane_retained(self):
