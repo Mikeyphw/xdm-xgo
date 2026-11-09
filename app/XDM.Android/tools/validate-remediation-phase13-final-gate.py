@@ -129,7 +129,8 @@ for marker in ('RSA-OAEP', 'AES-GCM', "globalThis.crypto.subtle",
                "const iv = globalThis.crypto.getRandomValues(new Uint8Array(12))",
                'additionalData: aad, tagLength: 128',
                'const uri = `${scheme}://capture?v=2&sid=',
-               '`&kid=', '`&ek=', '`&iv=', '`&ct=',
+               '`&kid=${encodeURIComponent(pairing.kid)}&ek=${base64Url(wrappedKey)}`',
+               '`&iv=${base64Url(iv)}&ct=${base64Url(ct)}`',
                'if (new TextEncoder().encode(uri).length <= 64 * 1024) return uri'):
     require(marker in capture_builder, f"encrypted capture v2 is missing {marker}")
 # Only transport metadata (sid/kid/wrapped key/nonce/ciphertext) may appear in the
