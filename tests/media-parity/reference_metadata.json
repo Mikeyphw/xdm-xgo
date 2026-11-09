@@ -1,0 +1,40 @@
+{
+  "reference_apk": {
+    "filename": "1DM+_18.2.apk",
+    "sha256": "a21cfb55ada0ca595cfa382bc4a1e8da8ffb7bcd8e9a13b9642c1c28c07d566f",
+    "size_bytes": 23472303,
+    "package": "idm.internet.download.manager.plus",
+    "version_name": "18.2",
+    "version_code": 20249,
+    "min_sdk": 21,
+    "target_sdk": 34,
+    "abi": [
+      "arm64-v8a"
+    ],
+    "native_libs": 11,
+    "dex_files": 3,
+    "signer_identity_verified": false,
+    "behaviorally_tested": false
+  },
+  "repository": {
+    "name": "Mikeyphw/xdm-xgo",
+    "commit": "de52f1eec4f0e3652c646310fba66e5ad627dbbf"
+  },
+  "test_cases": 140,
+  "test_case_prefix_counts": {
+    "REF": 10,
+    "SEC": 8,
+    "EXT": 12,
+    "RES": 6,
+    "SEL": 6,
+    "STORE": 10,
+    "HLS": 14,
+    "DASH": 12,
+    "MUX": 12,
+    "PUB": 8,
+    "LIVE": 14,
+    "REC": 12,
+    "UX": 12,
+    "PERF": 4
+  }
+}

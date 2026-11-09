@@ -1,0 +1,141 @@
+test_id,scenario,execution_platform,gate,pass_or_evidence_requirement
+REF01,"1DM installed ABI, version, legitimate license and signer identity",ARM64 licensed device,manual,Observed reference provenance or not_run
+REF02,1DM progressive MP4 from same fixture,ARM64 licensed device,manual,Expected playable progressive artifact
+REF03,1DM HLS master and quality picker,ARM64 licensed device,manual,Offered variants recorded without guessing
+REF04,1DM HLS alternate audio/forced merge,ARM64 licensed device,manual,Observed streams and partial status recorded
+REF05,1DM DASH MPD with separate tracks,ARM64 licensed device,manual,Observed rendition and output with ffprobe
+REF06,1DM HLS expired link refresh and resume,ARM64 licensed device,manual,Observed reauthentication and retries
+REF07,1DM live stream explicit stop behavior,ARM64 licensed device,manual,Actual stop and output state captured
+REF08,1DM incomplete HLS force merge,ARM64 licensed device,manual,"Actual dialog, output status and ffprobe recorded"
+REF09,1DM AES128 HLS fixture,ARM64 licensed device,manual,Observed authorization and success/failure recorded
+REF10,1DM large part count and internal staging,ARM64 licensed device,manual,Observed requests/storage warnings
+SEC01,No raw cookie/token in deep link URI,Node+Android JVM,required,Sanitized URI and evidence
+SEC02,Invalid/expired/replayed paired payload rejected,Node+Android JVM,required,No execution and no secrets leaked
+SEC03,Page JS cannot forge privileged request headers,Node extension,required,No credential escalation
+SEC04,Redirect to unrelated host strips credentials,Go/Android fixture,required,No sensitive headers across origin
+SEC05,Same-origin final header evidence stays scoped,Node+Android fixture,required,Authorized fetch succeeds
+SEC06,Cross-origin audio receives only explicit track credentials,Android fixture,required,No inherited master secret
+SEC07,Oversized candidate/manifest bounds reject safely,Node+Android JVM,required,No truncation pretending success
+SEC08,"Logs, failure and output do not contain secrets",All integration lanes,required,Redaction scanner passes
+EXT01,"HLS master, child and audio candidate dedup",Node extension,required,One logical item
+EXT02,Opaque /playback manifest with body evidence,Node extension,required,Manifest candidate and no promotion without evidence
+EXT03,MPD with video/audio groups detected,Node+Android JVM,required,Track relationships correct
+EXT04,Segment storm with .m4s/.ts,Node extension,required,No hundreds of independent picker rows
+EXT05,Two iframes reuse resource URL,Node extension,required,Separate frame context no token crossover
+EXT06,Signed URL rotated and same logical video,Node extension,required,Stable item and fresh exact request
+EXT07,JSON/video metadata misleading MIME,Node extension,required,No false auto-offer
+EXT08,MSE blob video linked to manifest network,Node extension,required,Underlying http source if verified or clear unsupported
+EXT09,Excluded site mode and navigation revision,Node extension,required,No unauthorized capture
+EXT10,Picker sends exactly one candidate,Node+Android UI,required,Single review without duplicated download
+EXT11,HLS MIME with no file extension,Node extension,required,Classify with evidence
+EXT12,Potential ad/tiny asset detection,Node extension,required,No false main media
+RES01,HLS full master graph and variants,Go+Android JVM,required,Exact graph
+RES02,DASH URL template and BaseURL inheritance,Go+Android JVM,required,Exact resolved URLs
+RES03,DASH multi-period track continuity,Go+Android JVM,required,Correct period-aware IDs
+RES04,Manifest cyclical references and malicious size,Go fuzz+JVM,required,Fail closed without hang
+RES05,"Wrong MIME, extensionless valid HLS",Android fixture,required,"Manifest by evidence, not suffix only"
+RES06,Signed URL expiration during resolution,Android fixture,required,"Refresh state, no stale mixed graph"
+SEL01,Video-only intent with missing audio,Kotlin JVM,required,Video only as requested
+SEL02,Best video with external default audio,Kotlin JVM,required,Audio required in output
+SEL03,Audio language and HLS group compatibility,Kotlin JVM,required,Correct group audio chosen
+SEL04,Subtitles attached or separate supported format,Kotlin JVM,required,Correct subtitle plan
+SEL05,Codec/container compatibility H265/Opus,Kotlin JVM+FFmpeg,required,Prefer supported container
+SEL06,Missing selected variant when master refreshed,Go/Kotlin fixture,required,Safe reselect/refresh required
+STORE01,Kill before temp part fsync,Go+Android fixture,required,No committed phantom fragment
+STORE02,Kill after fsync before rename,Go+Android fixture,required,Recover or redownload once
+STORE03,Kill after rename before DB commit,Go+Android fixture,required,Reconcile without duplicate output
+STORE04,Persist hash mismatch on restart,Go+Android fixture,required,Reject and retry
+STORE05,Range mismatch/ETag changed,Go+Android fixture,required,No corruption
+STORE06,Init map file durability,Go+Android fixture,required,Init retained and verified
+STORE07,Disk full during fragment write,Go+Android fixture,required,No false success and clean recovery
+STORE08,Same part in two attempt generations,Go+Android fixture,required,CAS ownership enforced
+STORE09,Canceled segment request cleans transient artifacts,Android instrumentation,required,No corrupt committed part
+STORE10,4GB+ destination/storage capability check,ARM64 device,manual,Correct preflight and clear error
+HLS01,Simple TS VOD HLS with ENDLIST,Go+Android x86 fixture,required,Complete ordered playable file
+HLS02,HLS master 360p/720p/1080p,Go+Android x86 fixture,required,Selected only required rendition
+HLS03,Separate video/audio language tracks,Android x86 media fixture,required,One playable output video+audio
+HLS04,Byte-range media parts,Go+Android fixture,required,Exact requested and verified bytes
+HLS05,fMP4 initialization map,Go+Android fixture,required,Playable output with init
+HLS06,AES128 segment and key rotation,Go+Android fixture,required,Authorized decrypt per key identity
+HLS07,AES128 encrypted EXT-X-MAP,Go+Android fixture,required,Verified init decrypt or clear fallback
+HLS08,EXT-X-GAP with skipped segment,Go+Android fixture,required,No cardinality contradiction; explicit partial policy
+HLS09,Discontinuity and timestamp jump,Android x86 media fixture,required,A/V timestamp consistency
+HLS10,Manifest refreshed after process death,Android instrumentation,required,Reuse only verified same parts
+HLS11,SAMPLE-AES/DRM fixture,Go+Android JVM,required,"ProtectedUnsupported, no bypass"
+HLS12,I-frame-only playlist,Go+Android JVM,required,Correct unsupported classification/fallback
+HLS13,Missing segment 404 then recovery,Android fixture,required,Retries or explicit partial
+HLS14,LL-HLS parts/preload hint,Go+Android fixture,required,No incorrect ordinary HLS success; qualified fallback
+DASH01,Static MPD SegmentTemplate,Go+Android x86 fixture,required,Correct init+segments
+DASH02,SegmentTimeline repetitions,Go+Android fixture,required,No repeated/missed frames
+DASH03,SegmentList and byte ranges,Go+Android fixture,required,Correct ranges
+DASH04,Video/audio separated representation,Android x86 media fixture,required,Mux correct streams
+DASH05,Two periods with same fragment number,Go+Android fixture,required,No identity collision
+DASH06,BaseURL inherited across MPD/period/rep,Go+Android fixture,required,Correct resolved per-origin URL
+DASH07,Missing initialization segment,Go+Android fixture,required,No valid completion
+DASH08,Dynamic MPD sliding window,Go+Android fixture,required,New segments only
+DASH09,Unavailable future segment delay,Go+Android fixture,required,Retry without aggressive polling
+DASH10,Auth token refresh cross host,Android fixture,required,Origin-safe request context
+DASH11,ContentProtection Widevine,Go+Android JVM,required,UnsupportedProtected
+DASH12,DASH multi-period audio timeline,Android x86 media fixture,required,Synchronized output
+MUX01,MP4 H264/AAC stream copy,Hosted Linux+Android,required,FFprobe two streams with correct durations
+MUX02,Video-only silently missing selected audio,Hosted Linux+Android,required,Reject output as incomplete
+MUX03,Matroska required for Opus/unsupported codec mix,Hosted Linux+Android,required,Correct container or explicit fail
+MUX04,Subtitle mux SRT/WebVTT,Hosted Linux+Android,required,Subtitle or explain unsupported
+MUX05,Discontinuity A/V sync,Hosted Linux+Android,required,PTS drift within fixture allowance
+MUX06,Concat TS with gaps,Hosted Linux+Android,required,Gap accounted and status truthful
+MUX07,CMAF fMP4 with init sections,Hosted Linux+Android,required,Playable output
+MUX08,No automatic transcode by default,Hosted Linux+Android,required,Codec copy when compatible
+MUX09,Different mux metadata than 1DM,Differential analyzer,required,"Decoded media comparison passes, binary hash not required"
+MUX10,Encrypted local source unavailable,Hosted Linux+Android,required,Fail without leaking secrets
+MUX11,Forced salvage with missing middle part,Android instrumented,required,User-confirmed PartialPublished only
+MUX12,FFprobe shows missing required stream,Android instrumented,required,Never Completed
+PUB01,Crash before destination promotion,Android instrumentation,required,No published incomplete file
+PUB02,Crash after publish before Room commit,Android instrumentation,required,Recover journal exactly once
+PUB03,Duplicate filename SAF conflict,Android instrumentation,required,Explicit conflict policy
+PUB04,Insufficient temp storage on SD/SAF,Android instrumented,required,No partial final file
+PUB05,Repeated completion from stale job,Android instrumentation,required,Generation CAS blocks stale writer
+PUB06,Explicit CancelAndDiscard,Android instrumentation,required,No output and cleanup
+PUB07,PartialPublish cannot be mistaken for completed,Android UI,required,State visibly distinct
+PUB08,Corrupt final output after FFprobe,Android fixture,required,No publication or recovery required
+LIVE01,Synthetic 11-minute virtual-clock live stream,Go/JVM unit,required,No default 10min kill
+LIVE02,12-minute actual live recording,Android ARM64/x86 full media,manual,Continues past default limit; playable StopAndSave
+LIVE03,StopAndSave before ENDLIST,Android x86 media,required,Graceful finalized short output
+LIVE04,CancelAndDiscard without output,Android x86 media,required,No published file
+LIVE05,HLS rolling media sequence,Go+Android fixture,required,Exactly once segment accounting
+LIVE06,DASH dynamic MPD rolling window,Go+Android fixture,required,No misordered fragments
+LIVE07,Network outage 30s then recovery,Android fixture,required,Safe retry with no loss of committed fragments
+LIVE08,LIVE HLS KEY rotation,Android fixture,required,Correct per-segment authorized key
+LIVE09,No data stalling with retry budget,Android fixture,required,WaitingForNetwork state and no false completion
+LIVE10,Live to VOD with ENDLIST,Android fixture,required,Natural finalization
+LIVE11,Live disk full,Android fixture,required,RecoveryRequired with preserved segment evidence
+LIVE12,Live app process killed during recording,ARM64 device,manual,Recovered checkpoint or honest limitation
+LIVE13,LL-HLS part vs full segment duplicate,Go fixture,required,No double content
+LIVE14,User-configured recording duration cap,Android instrumented,required,Stops at configured cap only
+REC01,Signed URL expires mid-VOD,Android fixture,required,Resume verified segments after authorized refresh
+REC02,Redirect changes host with Cookie,Android fixture,required,No cookie forwarded to unapproved origin
+REC03,Exact new URL and old mismatched segment,Android fixture,required,Quarantine stale bytes
+REC04,HTTP 429 Retry-After honored,Android fixture,required,No aggressive retry
+REC05,HTTP 5xx retry and permanent 410,Android fixture,required,Bounded retry and truthful status
+REC06,Termux fallback blocked for signed session,Kotlin JVM,required,No credential export
+REC07,Refresh user explicitly declines,Android UI,required,RefreshRequired and no auto-exec
+REC08,Reconnect after browser frame navigates,Node+Android,required,No obsolete authorization reuse
+REC09,Generation ownership racing refresh,Android instrumentation,required,At most one final artifact
+REC10,Recover immediately after process death,Android instrumentation,required,No file/ledger mismatch
+REC11,Failed mux source fragments remain available,Android fixture,required,Can retry finalization without redownload
+REC12,Unknown DRM/unsupported encryption,Android JVM,required,"Diagnose, do not attempt bypass"
+UX01,Logical item quality list and audio picker,Compose UI,required,Matches resolved graph
+UX02,Download -> finalizing -> saved phases,Compose UI,required,Truthful stage display
+UX03,Unknown byte length progress,Compose UI,required,Part-count progress not fake ETA
+UX04,Live Stop & Save action separate from Cancel,Compose/UIAutomator,required,Correct distinct state transitions
+UX05,Offline output open/share through SAF,ARM64 device,manual,Media MIME and URI valid
+UX06,Rotate and background during active transfer,Android x86 media,required,No duplicate jobs
+UX07,Notification action after process restore,ARM64 device,manual,Correct Resume/StopAndSave behavior
+UX08,Audio language choice preserved on retry,Compose UI,required,Same selection identity
+UX09,Incomplete output clearly labeled,Compose UI,required,No success toast or Completed
+UX10,Video codec fallback display,Compose UI,required,Correct container label
+UX11,FAB no media false positive,Node UI,required,No false main choice
+UX12,Send from iframe external browser,Android UI+Node,required,Correct session and page attribution
+PERF01,Manifest 5000 segments bounded memory,Go+JVM,required,Bounded memory and no OOM
+PERF02,50 parallel fragment failures controlled backoff,Go+Android fixture,required,Concurrency bounded
+PERF03,Live long soak memory and FD leak,ARM64 device,manual,Stable resource trend
+PERF04,No network after output verification,Android fixture,required,No unnecessary fetch retries

@@ -1,0 +1,113 @@
+name: XDM MP00 Media Parity Baseline
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'tests/media-parity/**'
+      - 'engine/media/**'
+      - 'engine/runtime/**'
+      - 'app/XDM.Android/browser-extension/**'
+      - 'app/XDM.Android/media/**'
+      - 'app/XDM.Android/transfer-native/**'
+      - '.github/workflows/media-parity.yml'
+  pull_request:
+    paths:
+      - 'tests/media-parity/**'
+      - 'engine/media/**'
+      - 'engine/runtime/**'
+      - 'app/XDM.Android/browser-extension/**'
+      - 'app/XDM.Android/media/**'
+      - 'app/XDM.Android/transfer-native/**'
+      - '.github/workflows/media-parity.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  media-server-integration:
+    name: MP00 playable HLS DASH server and evidence
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install FFmpeg on fixed runner series
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg
+      - name: Verify pinned FFmpeg version family and run fixture integration
+        env:
+          MP00_FFMPEG_VERSION: '6.1.1'
+        run: bash tests/media-parity/ci.sh
+      - name: Upload bounded MP00 per-case inventory
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mp00-fixture-inventory
+          path: ${{ runner.temp }}/mp00-acceptance.json
+          retention-days: 14
+          if-no-files-found: warn
+
+  media-static-and-unit:
+    name: MP00 existing Go and Firefox Node suites
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: engine/go.mod
+          cache-dependency-path: engine/go.sum
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Run source-owned media and extension suites
+        run: |
+          python3 -B tests/media-parity/run_suites.py go_media extension_node \
+            --output "${RUNNER_TEMP}/mp00-unit-suites.json"
+      - name: Publish source-suite receipts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mp00-existing-unit-suites
+          path: ${{ runner.temp }}/mp00-unit-suites.json
+          retention-days: 14
+          if-no-files-found: warn
+
+  media-kotlin-unit:
+    name: MP00 existing Android media JVM regressions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
+        with:
+          packages: 'platform-tools'
+      - name: Install pinned Android SDK
+        run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.7.1'
+      - name: Ensure Gradle wrapper
+        working-directory: app/XDM.Android
+        run: test -f gradle/wrapper/gradle-wrapper.jar || gradle wrapper --gradle-version 9.7.1
+      - name: Run Android media/native-hosted JVM regressions
+        run: |
+          python3 -B tests/media-parity/run_suites.py kotlin_media_native \
+            --output "${RUNNER_TEMP}/mp00-kotlin-suites.json"
+      - name: Publish Android-hosted suite receipt
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mp00-kotlin-jvm-suite
+          path: ${{ runner.temp }}/mp00-kotlin-suites.json
+          retention-days: 14
+          if-no-files-found: warn

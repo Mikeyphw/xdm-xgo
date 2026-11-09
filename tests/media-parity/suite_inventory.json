@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "suites": {
+    "fixture_http_ffmpeg": {
+      "runner": "python3 -B -m unittest discover -s tests/media-parity -p test_*.py -v",
+      "platform": "hosted Linux / local FFmpeg",
+      "scope": "fixture generation, HLS/DASH remux, complete decode, privacy-safe server, evidence schema",
+      "production_media_parity_proven": false
+    },
+    "extension_node": {
+      "runner": "node app/XDM.Android/browser-extension/tests/test_*.js (seven scripts)",
+      "platform": "Node.js 22",
+      "scope": "existing detection/handoff JavaScript regression suite, known A01 debt persists",
+      "production_media_parity_proven": false
+    },
+    "go_media": {
+      "runner": "go test ./media/... (from engine/)",
+      "platform": "Go 1.23",
+      "scope": "existing HLS/DASH parsers, graph and transfer unit/fuzz seed tests",
+      "production_media_parity_proven": false
+    },
+    "kotlin_media_native": {
+      "runner": "./gradlew :media:test :transfer-native:testDebugUnitTest",
+      "platform": "Android JVM / Gradle Actions",
+      "scope": "existing Kotlin planner and native HLS tests, not physical media runtime",
+      "production_media_parity_proven": false
+    },
+    "physical_arm64_1dm": {
+      "runner": "owner-controlled licensed 1DM+ app + public Android UI/SAF",
+      "platform": "physical ARM64",
+      "scope": "reference behavior; not runnable in public CI",
+      "production_media_parity_proven": false
+    },
+    "x86_media_runtime": {
+      "runner": "future MP12 opt-in media-qualified API36 x86_64 emulator",
+      "platform": "opt-in x86_64 Android",
+      "scope": "not implemented by MP00; existing XP03B smoke is not full media parity",
+      "production_media_parity_proven": false
+    }
+  }
+}
