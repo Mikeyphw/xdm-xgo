@@ -165,6 +165,46 @@ class X86SourceAndIntegrity(unittest.TestCase):
             with self.assertRaisesRegex(ValueError,'CORE_SOURCE_MISMATCH'):
                 v.inspect(path,core)
 
+    def test_xp03b_existing_app_journeys_manual_only(self):
+        runner = (ROOT/'scripts/run_xgo_x86_64_emulator.sh').read_text()
+        wf = (ROOT/'.github/workflows/android.yml').read_text()
+        self.assertIn("inputs.x86_64_native_test == true",wf)
+        self.assertIn('XGO_X86_TEST_EXPLICIT_OPT_IN',runner)
+        self.assertIn('com.mikeyphw.xdm.android.AppSmokeTest',runner)
+        self.assertIn('ExternalControlSecurityInstrumentedTest#exportedAutomationResolvesOnlyToReviewGate',runner)
+        self.assertIn('verify_xgo_x86_ui_runs.py',runner)
+        self.assertNotIn(':app:connectedDebugAndroidTest',runner)
+        compose=(ROOT/'app/XDM.Android/app/src/androidTest/kotlin/com/mikeyphw/xdm/android/AppSmokeTest.kt').read_text()
+        route=(ROOT/'app/XDM.Android/app/src/androidTest/kotlin/com/mikeyphw/xdm/android/ExternalControlSecurityInstrumentedTest.kt').read_text()
+        verifier=load('scripts/verify_xgo_x86_ui_runs.py','xp03b_methods')
+        self.assertEqual(len(verifier.SUITES['compose'][1]),4)
+        for method in verifier.SUITES['compose'][1]:
+            self.assertIn('fun '+method+'()',compose)
+        self.assertIn('fun exportedAutomationResolvesOnlyToReviewGate()',route)
+
+    def test_xp03b_receipt_fails_closed_on_missing_skipped_duplicate_and_wrong_method(self):
+        verifier=load('scripts/verify_xgo_x86_ui_runs.py','xp03b_receipt')
+        def transcript(cls,methods):
+            lines=[]
+            for method in methods:
+                lines.extend([f'INSTRUMENTATION_STATUS: class={cls}',
+                  f'INSTRUMENTATION_STATUS: test={method}',
+                  'INSTRUMENTATION_STATUS_CODE: 0'])
+            lines.extend(['OK ('+str(len(methods))+(' test)' if len(methods)==1 else ' tests)'),
+              'INSTRUMENTATION_CODE: -1'])
+            return '\n'.join(lines)
+        valid={k:transcript(*v) for k,v in verifier.SUITES.items()}
+        self.assertEqual(verifier.inspect(valid)['total_instrumentation_tests'],6)
+        for name in valid:
+            d=dict(valid);d[name]=valid[name].replace('INSTRUMENTATION_CODE: -1','INSTRUMENTATION_CODE: 0')
+            with self.assertRaisesRegex(ValueError,'INSTRUMENTATION_FAILED'):verifier.inspect(d)
+            d=dict(valid);d[name]=valid[name].replace('INSTRUMENTATION_STATUS_CODE: 0','INSTRUMENTATION_STATUS_CODE: -2',1)
+            with self.assertRaisesRegex(ValueError,'INSTRUMENTATION_FAILED'):verifier.inspect(d)
+            d=dict(valid);d[name]=valid[name].replace('INSTRUMENTATION_STATUS_CODE: 0','INSTRUMENTATION_STATUS_CODE: 0\nINSTRUMENTATION_STATUS_CODE: 0',1)
+            with self.assertRaisesRegex(ValueError,'METHOD_COUNT_MISMATCH'):verifier.inspect(d)
+        d=dict(valid);d['compose']=valid['compose'].replace('downloadsShellIsVisible','unknownMethod')
+        with self.assertRaisesRegex(ValueError,'METHODS_MISMATCH'):verifier.inspect(d)
+
     def test_smoke_exercises_actual_jni_and_launch(self):
         smoke=(ROOT/'app/XDM.Android/app/src/androidTest/kotlin/com/mikeyphw/xdm/android/XgoX86JniSmokeTest.kt').read_text()
         runner=(ROOT/'scripts/run_xgo_x86_64_emulator.sh').read_text()
@@ -174,7 +214,7 @@ class X86SourceAndIntegrity(unittest.TestCase):
         self.assertIn('am start -W',runner)
         self.assertIn('verify_xgo_x86_apk.py',runner)
         self.assertIn('--core app/src/main/jniLibs/x86_64/libxdmcore.so',runner)
-        self.assertIn('XGO_X86_EMULATOR_APP_JNI_PASS',runner)
+        self.assertIn('XGO_XP03B_EMULATOR_JNI_AND_UI_PASS',runner)
 
 
 if __name__ == '__main__':

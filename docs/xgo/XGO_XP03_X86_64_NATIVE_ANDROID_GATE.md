@@ -36,3 +36,18 @@ application sources, release APKs and signature/release gates remain untouched.
 The x86_64 workflow still requires manual `x86_64_native_test=true` and
 remains a test-only job. A passing new hosted emulator run is required before
 claiming runtime qualification; offline tests are not that proof.
+
+## XP03B: explicit x86_64 real app Compose and exported-route acceptance
+
+After XP03 HF01 passed manual run 42543908972 (Android/amd64 Go JNI,
+APK install and app startup), XP03B extends the *same manual-only* x86_64 lane.
+It runs four existing production MainActivity `AppSmokeTest` Compose journeys
+and the existing exported automation review-route test, besides the existing
+Go/JNI smoke. A fail-closed verifier requires all six exact methods and successful
+AndroidJUnitRunner completion, and records SHA-256 of every transcript before
+claiming `EMULATOR_X86_64_APP_JNI_AND_UI_PASS`.
+
+Normal ARM64 builds, release APKs and production `target_arch=arm64` validation
+are unchanged. The x86_64 profile is still prepared only in disposable manual
+CI workspaces. This covers limited UI reachability and exported intent resolution,
+not full media backends, native ARM64 runtime or pixel-perfect UI fidelity.
