@@ -26,8 +26,9 @@ def main() -> None:
     validator = WEB_VALIDATOR.read_text(encoding='utf-8')
 
     check('  pull_request:\n' not in wf, 'full Android workflow still auto-runs on PR')
-    check('types: [opened, reopened, synchronize, labeled, unlabeled, ready_for_review]' in wf,
-          'label change does not trigger qualification')
+    check('  pull_request:\n' not in wf and
+          'types: [opened, reopened, synchronize, labeled, unlabeled, ready_for_review]' not in wf,
+          'full Android workflow still listens to PR labels')
     check("  push:\n    tags: ['android-v*']" in wf and 'branches: [main]' not in wf,
           'Android main auto-build is enabled or release tag gate missing')
     check('  workflow_dispatch:' in wf, 'manual full qualification route removed')
