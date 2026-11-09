@@ -27,6 +27,7 @@ on:
       - 'scripts/test_xgo_mp01_hf04_ci_tiers.py'
       - 'scripts/test_xgo_xpi_v161_parity.py'
       - 'scripts/test_xgo_mp01_hf05_xpi_guard.py'
+      - 'scripts/test_xgo_mp01_hf06_capture_contract.py'
   pull_request:
     paths:
       - 'app/XDM.Android/**'
@@ -51,6 +52,7 @@ on:
       - 'scripts/test_xgo_mp01_hf04_ci_tiers.py'
       - 'scripts/test_xgo_xpi_v161_parity.py'
       - 'scripts/test_xgo_mp01_hf05_xpi_guard.py'
+      - 'scripts/test_xgo_mp01_hf06_capture_contract.py'
     types: [opened, reopened, synchronize, labeled, unlabeled, ready_for_review]
   workflow_dispatch:
     inputs:
@@ -118,6 +120,9 @@ jobs:
           set -euo pipefail
           python3 -B scripts/test_xgo_xpi_v161_parity.py
           python3 -B scripts/test_xgo_mp01_hf05_xpi_guard.py
+      - name: MP01 HF06 encrypted XPI pairing and Android JVM contract preflight (no Gradle)
+        working-directory: .
+        run: python3 -B scripts/test_xgo_mp01_hf06_capture_contract.py
       - name: Hotfix/full CI gating contract
         working-directory: .
         run: python3 -B scripts/test_xgo_mp01_hf04_ci_tiers.py
