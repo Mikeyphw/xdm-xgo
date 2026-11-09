@@ -1,0 +1,72 @@
+{
+  "observations": {
+    "REF01": {
+      "evidence": null,
+      "observed_at": null,
+      "status": "not_run"
+    },
+    "REF02": {
+      "evidence": null,
+      "observed_at": null,
+      "status": "not_run"
+    },
+    "REF03": {
+      "evidence": null,
+      "observed_at": null,
+      "status": "not_run"
+    },
+    "REF04": {
+      "evidence": null,
+      "observed_at": null,
+      "status": "not_run"
+    },
+    "REF05": {
+      "evidence": null,
+      "observed_at": null,
+      "status": "not_run"
+    },
+    "REF06": {
+      "evidence": null,
+      "observed_at": null,
+      "status": "not_run"
+    },
+    "REF07": {
+      "evidence": null,
+      "observed_at": null,
+      "status": "not_run"
+    },
+    "REF08": {
+      "evidence": null,
+      "observed_at": null,
+      "status": "not_run"
+    },
+    "REF09": {
+      "evidence": null,
+      "observed_at": null,
+      "status": "not_run"
+    },
+    "REF10": {
+      "evidence": null,
+      "observed_at": null,
+      "status": "not_run"
+    }
+  },
+  "reference": {
+    "abi": [
+      "arm64-v8a"
+    ],
+    "behaviorally_tested": false,
+    "dex_files": 3,
+    "filename": "1DM+_18.2.apk",
+    "min_sdk": 21,
+    "native_libs": 11,
+    "package": "idm.internet.download.manager.plus",
+    "sha256": "a21cfb55ada0ca595cfa382bc4a1e8da8ffb7bcd8e9a13b9642c1c28c07d566f",
+    "signer_identity_verified": false,
+    "size_bytes": 23472303,
+    "target_sdk": 34,
+    "version_code": 20249,
+    "version_name": "18.2"
+  },
+  "schema_version": 1
+}
