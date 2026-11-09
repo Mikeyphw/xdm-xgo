@@ -3,6 +3,10 @@
 from __future__ import annotations
 import importlib.util
 import pathlib
+import hashlib
+import os
+import subprocess
+from unittest import mock
 import struct
 import tempfile
 import unittest
@@ -32,7 +36,54 @@ class X86SourceAndIntegrity(unittest.TestCase):
         self.assertRaisesRegex(ValueError, 'ANCHOR_MISMATCH', p.transform, fixture.replace('arm64-v8a', 'x86_64'))
         self.assertRaisesRegex(ValueError, 'ANCHOR_MISMATCH', p.transform, fixture + '\n' + p.PAIRS[0][0])
 
-    def test_real_android_gradle_anchors_remain_pinned(self):
+    def test_x86_provenance_mapping_is_strictly_test_only(self):
+        p = load('scripts/xgo_x86_64_profile.py', 'profile_arch_policy')
+        src = 'prefix\n' + p.ARCH_PROVENANCE_SOURCE + '\nsuffix'
+        result = p.transform_authority(src)
+        self.assertIn(p.ARCH_PROVENANCE_TEST, result)
+        self.assertNotIn(p.ARCH_PROVENANCE_SOURCE, result)
+        self.assertIn('amd64', result)
+        self.assertNotIn('== "arm64"', result)
+        with self.assertRaisesRegex(ValueError, 'AUTHORITY_ARCH_ANCHOR_MISMATCH'):
+            p.transform_authority(result)
+        with self.assertRaisesRegex(ValueError, 'AUTHORITY_ARCH_ANCHOR_MISMATCH'):
+            p.transform_authority(src + '\n' + p.ARCH_PROVENANCE_SOURCE)
+        with self.assertRaisesRegex(ValueError, 'AUTHORITY_ARCH_ANCHOR_MISMATCH'):
+            p.transform_authority(src.replace('"arm64"', '"x86_64"'))
+        self.assertEqual(len(p.AUTHORITY_BLOB), 40)
+        self.assertIn("GITHUB_ACTIONS", pathlib.Path(p.__file__).read_text())
+        self.assertIn("RUNNER_OS", pathlib.Path(p.__file__).read_text())
+
+    def test_atomic_preparation_source_validation(self):
+        p = load('scripts/xgo_x86_64_profile.py', 'profile_atomic')
+        with tempfile.TemporaryDirectory() as td:
+            repo = pathlib.Path(td)
+            app = repo / p.APP.relative_to(p.ROOT)
+            auth = repo / p.AUTHORITY.relative_to(p.ROOT)
+            builder = repo / 'tools/xgo/build_android_xdmcore_x86_64.py'
+            for target in (app, auth, builder):
+                target.parent.mkdir(parents=True, exist_ok=True)
+            a_src = '\n'.join(x for x, _ in p.PAIRS) + '\n'
+            b_src = 'Kotlin\n' + p.ARCH_PROVENANCE_SOURCE + '\n'
+            app.write_text(a_src)
+            auth.write_text(b_src)
+            builder.write_text('native compiler source exists\n')
+            def blob(data):
+                content = data.encode()
+                return hashlib.sha1(b'blob ' + str(len(content)).encode() + b'\0' + content).hexdigest()
+            with mock.patch.object(p, 'BASE_BLOB', blob(a_src)), \
+                 mock.patch.object(p, 'AUTHORITY_BLOB', blob(b_src)), \
+                 mock.patch.dict(os.environ, {'GITHUB_ACTIONS':'true', 'RUNNER_OS':'Linux'}):
+                # No partial rewrite when either source pin has drifted.
+                auth.write_text(b_src + 'different\n')
+                with self.assertRaisesRegex(ValueError, 'ENGINE_AUTHORITY_BLOB_MISMATCH'):
+                    p.prepare(repo)
+                self.assertEqual(app.read_text(), a_src)
+                auth.write_text(b_src)
+                p.prepare(repo)
+                self.assertEqual(app.read_text(), p.transform(a_src))
+                self.assertEqual(auth.read_text(), p.transform_authority(b_src))
+
         p = load('scripts/xgo_x86_64_profile.py', 'profile_real')
         gradle = ROOT / 'app/XDM.Android/app/build.gradle.kts'
         if gradle.is_file():
@@ -41,6 +92,11 @@ class X86SourceAndIntegrity(unittest.TestCase):
         self.assertEqual(len(p.BASE_BLOB), 40)
         self.assertIn('androidTestImplementation(libs.androidx.test.runner)', p.transform('\n'.join(before for before, _ in p.PAIRS)))
         self.assertIn('XGO_X86_PROFILE_CI_ONLY', (ROOT / 'scripts/xgo_x86_64_profile.py').read_text())
+        authority = ROOT / 'app/XDM.Android/app/src/main/kotlin/com/mikeyphw/xdm/android/engine/AndroidEngineProcessAuthority.kt'
+        if authority.is_file():
+            self.assertEqual(authority.read_text().count(p.ARCH_PROVENANCE_SOURCE), 1)
+            self.assertEqual(authority.read_text().count(p.ARCH_PROVENANCE_TEST), 0)
+            self.assertEqual(p.git_blob(ROOT, authority), p.AUTHORITY_BLOB)
         self.assertNotIn('git reset --hard', (ROOT / 'scripts/xgo_x86_64_profile.py').read_text())
 
     def test_workflow_preserves_prior_gates_and_executes_runtime_only_on_manual_opt_in(self):
