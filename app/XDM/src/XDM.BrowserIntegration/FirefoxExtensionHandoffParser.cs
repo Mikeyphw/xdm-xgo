@@ -93,9 +93,11 @@ public static class FirefoxExtensionHandoffParser
         if (!parameters.TryGetValue("v", out string? versionRaw)
             || !int.TryParse(versionRaw, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out int version)
             || action == "add" && version != 1
-            || action == "capture" && version != 3)
+            || action == "capture")
         {
-            error = "Firefox handoff contract version is unsupported.";
+            error = action == "capture"
+                ? "Encrypted browser captures require the paired Android app; desktop supports public Add v1 only."
+                : "Firefox handoff contract version is unsupported.";
             return false;
         }
 

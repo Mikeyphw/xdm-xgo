@@ -30,84 +30,35 @@ public sealed class FirefoxExtensionHandoffParserTests
     }
 
     [Fact]
-    public void CaptureV3UsesOnlyFinalSentHeaderAuthority()
+    public void CaptureV3CannotSmuggleCredentialBearingNavigationIntoDesktop()
     {
         string uri = BuildUri("capture", new Dictionary<string, string>
         {
             ["v"] = "3",
-            ["url"] = "https://cdn.example.test/master.m3u8",
-            ["page"] = "https://example.test/watch/2",
-            ["mime"] = "application/vnd.apple.mpegurl",
-            ["proposedHeaders"] = "Cookie: proposed=1\nAuthorization: Bearer proposed",
-            ["headers"] = "Cookie: final=1\nReferer: https://example.test/watch/2\nUser-Agent: Firefox-Test\nAccept: */*\nAuthorization: Bearer final\nRange: bytes=0-99",
-            ["finalHeaders"] = "Cookie: final=1\nReferer: https://example.test/watch/2\nUser-Agent: Firefox-Test\nAccept: */*\nAuthorization: Bearer final\nRange: bytes=0-99"
+            ["url"] = "https://cdn.example.test/master.m3u8?signature=signed-secret",
+            ["headers"] = "Cookie: sid=secret\nAuthorization: Bearer secret",
+            ["finalHeaders"] = "Cookie: sid=secret\nAuthorization: Bearer secret"
         });
-
-        Assert.True(FirefoxExtensionHandoffParser.TryParse(uri, out FirefoxExtensionHandoff? handoff, out string error), error);
-        BrowserCaptureRequest request = Assert.Single(handoff!.Requests);
-        Assert.Equal("media", request.Operation);
-        Assert.Equal("final=1", request.Cookie);
-        Assert.Equal("https://example.test/watch/2", request.Referer);
-        Assert.Equal("Firefox-Test", request.UserAgent);
-        Assert.True(request.Headers!.TryGetValue("Accept", out string? accept));
-        Assert.Equal("*/*", accept);
-        Assert.DoesNotContain(request.Headers!, pair => pair.Key.Equals("Authorization", StringComparison.OrdinalIgnoreCase));
-        Assert.DoesNotContain(request.Headers!, pair => pair.Key.Equals("Range", StringComparison.OrdinalIgnoreCase));
+        Assert.False(FirefoxExtensionHandoffParser.TryParse(uri, out _, out string error));
+        Assert.Contains("paired Android app", error, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void SessionCandidatesNeverPromoteProposedHeaders()
+    public void CaptureV3CandidateBatchIsRejectedBeforeReadingNestedRequestCredentials()
     {
-        string candidates = JsonSerializer.Serialize(new object[]
-        {
-            new
-            {
-                url = "https://cdn.example.test/variant-a.m3u8",
-                pageUrl = "https://example.test/watch/3",
-                stableMediaId = "candidate_001",
-                contentType = "application/vnd.apple.mpegurl",
-                proposedHeaders = new Dictionary<string, string>
-                {
-                    ["Cookie"] = "proposed=1",
-                    ["Referer"] = "https://evil.example.test/"
-                },
-                finalHeaders = new Dictionary<string, string>
-                {
-                    ["Cookie"] = "sent=1",
-                    ["Referer"] = "https://example.test/watch/3"
-                }
-            },
-            new
-            {
-                url = "https://cdn.example.test/variant-b.m3u8",
-                pageUrl = "https://example.test/watch/3",
-                stableMediaId = "candidate_002",
-                contentType = "application/vnd.apple.mpegurl",
-                proposedHeaders = new Dictionary<string, string> { ["Cookie"] = "must-not-run=1" }
-            }
-        });
         string uri = BuildUri("capture", new Dictionary<string, string>
         {
             ["v"] = "3",
             ["url"] = "https://cdn.example.test/master.m3u8",
-            ["page"] = "https://example.test/watch/3",
             ["sid"] = "session_12345678",
-            ["candidateCount"] = "2",
-            ["candidates"] = candidates
+            ["candidates"] = "[{\"url\":\"https://cdn.example.test/variant.m3u8?token=secret\"}]"
         });
-
-        Assert.True(FirefoxExtensionHandoffParser.TryParse(uri, out FirefoxExtensionHandoff? handoff, out string error), error);
-        Assert.Equal(3, handoff!.Requests.Count);
-        Assert.Equal("sent=1", handoff.Requests[1].Cookie);
-        Assert.Equal("https://example.test/watch/3", handoff.Requests[1].Referer);
-        Assert.Null(handoff.Requests[2].Cookie);
-        Assert.Equal("https://example.test/watch/3", handoff.Requests[2].Referer);
-        Assert.Equal("session_12345678", handoff.CaptureSessionId);
-        Assert.Equal(2, handoff.DeclaredCandidateCount);
+        Assert.False(FirefoxExtensionHandoffParser.TryParse(uri, out _, out string error));
+        Assert.Contains("paired Android app", error, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void RejectsCandidateBatchWithoutCaptureSessionIdentity()
+    public void AnyLegacyCaptureV3IsRejectedWithoutTrustingSessionIdentity()
     {
         string uri = BuildUri("capture", new Dictionary<string, string>
         {
@@ -115,9 +66,8 @@ public sealed class FirefoxExtensionHandoffParserTests
             ["url"] = "https://cdn.example.test/master.m3u8",
             ["candidates"] = "[]"
         });
-
         Assert.False(FirefoxExtensionHandoffParser.TryParse(uri, out _, out string error));
-        Assert.Contains("session ID", error, StringComparison.Ordinal);
+        Assert.Contains("paired Android app", error, StringComparison.Ordinal);
     }
 
     [Theory]
