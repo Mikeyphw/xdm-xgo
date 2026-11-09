@@ -518,7 +518,7 @@
     if (bodyExcerpt && responseUrl && evidence) {
       const analysis = CORE.analyzeBody({
         text: bodyExcerpt,
-        contentType: observation.contentType || evidence.contentType || "",
+        contentType: evidence.contentType || observation.contentType || "",
         responseUrl
       });
       if (analysis.manifestBody) {
@@ -553,7 +553,7 @@
           headers: correlated.headers || {},
           requestFingerprint: correlated.requestFingerprint,
           stableMediaId: correlated.stableMediaId,
-          parentManifestUrl: analysis.hlsBody ? responseUrl : "",
+          parentManifestUrl: analysis.hlsBody || analysis.dashBody ? responseUrl : "",
           at: Date.now(),
         })) || added;
       }
@@ -623,6 +623,7 @@
         requestType: candidate.requestType || "",
         reason: candidate.reason || "",
         pageUrl: uiOnlyUrl(candidate.pageUrl || ""),
+        frameId: Number(candidate.frameId || 0),
         frameUrl: uiOnlyUrl(candidate.frameUrl || ""),
         playbackObserved: Boolean(candidate.playbackObserved),
         thumbnailUrl: "",
@@ -810,7 +811,14 @@
     if (browser.webNavigation && browser.webNavigation.onCommitted && browser.webNavigation.onCommitted.addListener) {
       browser.webNavigation.onCommitted.addListener(details => {
         if (details.tabId === -1) return;
-        candidateStore.clearDocumentEvidence(details.tabId, Number.isFinite(Number(details.frameId)) ? Number(details.frameId) : null);
+        const committedFrame = Number.isFinite(Number(details.frameId)) ? Number(details.frameId) : 0;
+        if (committedFrame === 0) {
+          candidateStore.removeTab(details.tabId);
+          diagnosticCounters.delete(details.tabId);
+          if (dispatchTimers.has(details.tabId)) clearTimeout(dispatchTimers.get(details.tabId));
+          dispatchTimers.delete(details.tabId);
+        } else candidateStore.clearFrame(details.tabId, committedFrame);
+        updateBadge(details.tabId);
         for (const [requestId, entry] of capturedHeaders) {
           if (Number(entry.tabId || details.tabId) === Number(details.tabId) && Number(entry.frameId || 0) === Number(details.frameId || 0)) capturedHeaders.delete(requestId);
         }
@@ -820,8 +828,10 @@
     if (browser.tabs && browser.tabs.onUpdated && browser.tabs.onUpdated.addListener) {
       browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
         if (changeInfo && (changeInfo.url || changeInfo.status === "loading")) {
-          candidateStore.clearDocumentEvidence(tabId);
+          candidateStore.removeTab(tabId);
+          diagnosticCounters.delete(tabId);
           lastDispatchedByTab.delete(tabId);
+          updateBadge(tabId);
         }
       });
     }

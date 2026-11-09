@@ -299,7 +299,7 @@
     const contentType = normalizeMime(input && input.contentType);
     const responseUrl = String(input && input.responseUrl || "");
     const hlsBody = /^#EXTM3U(?:\r?\n|$)/i.test(trimmed);
-    const dashBody = /<\s*MPD(?:\s|>)/i.test(trimmed) || contentType === "application/dash+xml";
+    const dashBody = /^<\?xml\s[^>]{0,256}\?>\s*<MPD(?:\s|>)|^<MPD(?:\s|>)/i.test(trimmed) && !/<!\s*(?:DOCTYPE|ENTITY)\b/i.test(trimmed);
     const manifestBody = hlsBody || dashBody;
     const candidates = extractCandidatesFromText(text, responseUrl);
 
@@ -404,6 +404,75 @@
     };
   }
 
+  // MP02: Bounded DASH discovery hints. This deliberately does NOT implement
+  // MP03's authoritative manifest graph, XML entity resolution, or download plan.
+  // Observations from page code are only accepted after exact webRequest proof.
+  function dashAttributes(text) {
+    const result = {};
+    const re = /([A-Za-z][A-Za-z0-9_:.-]*)\s*=\s*(["'])([^"']{0,512})\2/g;
+    let match;
+    while ((match = re.exec(String(text || "").slice(0, 4096)))) {
+      result[match[1].toLowerCase()] = match[3];
+    }
+    return result;
+  }
+
+  function parseDashRelationships(text, responseUrl) {
+    const body = String(text || "").slice(0, MAX_BODY_CHARS);
+    const empty = { isDash: false, master: false, childPlaylists: [], mediaTracks: [],
+      variantInfo: [], trackInfo: [], segments: [], protectedMedia: false, lowLatency: false };
+    // Fail closed on XML entities and foreign roots; XML is never executed here.
+    if (!/^\s*(?:<\?xml\s[^>]{0,256}\?>\s*)?<MPD(?:\s|>)/i.test(body) ||
+        /<!\s*(?:DOCTYPE|ENTITY)\b/i.test(body)) return empty;
+    const variantInfo = [], trackInfo = [], segments = [];
+    const manifestRoot = responseUrl;
+    const takeBase = (scope, parent) => {
+      const match = /<BaseURL(?:\s[^>]*)?>\s*([^<]{1,2000})\s*<\/BaseURL\s*>/i.exec(scope);
+      return match ? (resolveUrl(match[1].trim(), parent) || parent) : parent;
+    };
+    const head = body.split(/<(?:Period|AdaptationSet)\b/i, 1)[0];
+    const mpdBase = takeBase(head, manifestRoot);
+    const adaptationRe = /<AdaptationSet\b([^>]{0,4000})>([\s\S]*?)<\/AdaptationSet\s*>/gi;
+    let adaptation, adaptationCount = 0;
+    while ((adaptation = adaptationRe.exec(body)) && adaptationCount++ < 48) {
+      const attrs = dashAttributes(adaptation[1]);
+      const segment = adaptation[2].slice(0, 200000);
+      const firstRepresentation = segment.search(/<Representation\b/i);
+      const adaptationBase = takeBase(firstRepresentation < 0 ? segment : segment.slice(0, firstRepresentation), mpdBase);
+      const representationRe = /<Representation\b([^>]{0,4000})(?:\/>|>([\s\S]*?)<\/Representation\s*>)/gi;
+      let rep, representationCount = 0;
+      while ((rep = representationRe.exec(segment)) && representationCount++ < 64 &&
+             variantInfo.length + trackInfo.length < 96) {
+        const data = dashAttributes(rep[1]);
+        const repBase = takeBase(String(rep[2] || '').slice(0, 8192), adaptationBase);
+        const mime = String(data.mimetype || attrs.mimetype || '').toLowerCase();
+        const codecs = String(data.codecs || attrs.codecs || '');
+        const type = String(attrs.contenttype || data.contenttype || (mime.startsWith('audio/') ? 'audio' :
+          mime.startsWith('text/') || /subtitle|ttml|vtt/.test(mime) ? 'subtitles' : 'video')).toLowerCase();
+        const representationId = String(data.id || `${adaptationCount}-${representationCount}`).slice(0, 128);
+        const item = { url: repBase, representationId, adaptationId: String(attrs.id || ''),
+          bandwidth: Math.max(0, Number(data.bandwidth || 0) || 0),
+          width: Math.max(0, Number(data.width || 0) || 0), height: Math.max(0, Number(data.height || 0) || 0),
+          codecs, mimeType: mime, language: String(attrs.lang || ''), type };
+        if (type === 'audio' || type === 'subtitles' || type === 'text') {
+          trackInfo.push(Object.assign({}, item, { groupId: String(attrs.id || ''),
+            name: representationId, default: false }));
+        } else variantInfo.push(item);
+      }
+      // Explicit SegmentURL entries are child observations, never picker items.
+      const explicitSegmentRe = /<SegmentURL\b[^>]*\bmedia\s*=\s*["']([^"']{1,2000})["'][^>]*\/?\s*>/gi;
+      let segmentMatch;
+      while ((segmentMatch = explicitSegmentRe.exec(segment)) && segments.length < 96) {
+        const url = resolveUrl(segmentMatch[1], adaptationBase);
+        if (url) segments.push(url);
+      }
+    }
+    return { isDash: true, master: variantInfo.length + trackInfo.length > 0,
+      childPlaylists: [], mediaTracks: [], variantInfo, trackInfo,
+      segments: [...new Set(segments)],
+      protectedMedia: /<\s*ContentProtection\b/i.test(body), lowLatency: false };
+  }
+
   function rankCandidate(candidate) {
     let score = Number(candidate && candidate.confidence || 0);
     const url = String(candidate && candidate.url || "");
@@ -432,6 +501,7 @@
     extractCandidatesFromText,
     analyzeBody,
     parseHlsRelationships,
+    parseDashRelationships,
     rankCandidate,
     resolveUrl,
     candidateConfidence,

@@ -23,6 +23,17 @@
     return [String(exact || ''), requestId, evidenceFrameId(candidate), evidenceGeneration(candidate)].join('\n');
   }
 
+  // A single CDN URL may be used by independent iframe players. Keep picker
+  // identity frame-scoped while retaining exact-request evidence independently.
+  function scopedMediaId(id, frameId) {
+    const value = String(id || "");
+    if (!value) return "";
+    const frame = evidenceFrameId({ frameId });
+    const suffix = `@frame:${frame}`;
+    if (/@frame:[0-9]+$/.test(value)) return value.endsWith(suffix) ? value : "";
+    return value + suffix;
+  }
+
   function cloneCandidate(candidate) {
     return Object.assign({}, candidate, {
       headers: Object.assign({}, candidate && candidate.headers || {}),
@@ -135,8 +146,8 @@
         rootItem.requestEvidenceCount = Math.min(64, Number(rootItem.requestEvidenceCount || 0) + Number(childItem.requestEvidenceCount || 0));
         rootItem.variantUrls = [...new Set([...(rootItem.variantUrls || []), childItem.url, ...(childItem.variantUrls || [])])].slice(0, 32);
         rootItem.trackUrls = [...new Set([...(rootItem.trackUrls || []), ...(childItem.trackUrls || [])])].slice(0, 32);
-        rootItem.variantInfo = mergeObjectArray(rootItem.variantInfo, childItem.variantInfo, item => item && item.url, 32);
-        rootItem.trackInfo = mergeObjectArray(rootItem.trackInfo, childItem.trackInfo, item => item && `${item.type || "track"}|${item.groupId || ""}|${item.url || ""}`, 32);
+        rootItem.variantInfo = mergeObjectArray(rootItem.variantInfo, childItem.variantInfo, item => item && `${item.url}|${item.representationId || ""}`, 32);
+        rootItem.trackInfo = mergeObjectArray(rootItem.trackInfo, childItem.trackInfo, item => item && `${item.type || "track"}|${item.groupId || ""}|${item.url || ""}|${item.representationId || ""}`, 32);
         rootItem.confidence = Math.max(Number(rootItem.confidence || 0), Number(childItem.confidence || 0));
         bucket.delete(child);
       } else if (childItem && !rootItem) {
@@ -160,7 +171,7 @@
       this.rememberEvidence(numericTabId, evidenceCandidate);
       if (CORE.isLikelySegment(url)) {
         stats.suppressedSegments += 1;
-        const parentId = candidate.parentStableMediaId || candidate.parentManifestUrl && CORE.stableMediaIdentity(candidate.parentManifestUrl);
+        const parentId = scopedMediaId(candidate.parentStableMediaId || (candidate.parentManifestUrl && CORE.stableMediaIdentity(candidate.parentManifestUrl)), candidate.frameId);
         const root = parentId && this.rootIdentity(numericTabId, parentId);
         const parent = root && bucket.get(root);
         if (parent) parent.segmentCount = Number(parent.segmentCount || 0) + 1;
@@ -172,14 +183,16 @@
         requestGeneration: candidate.requestGeneration,
       }) || "").trim();
       if (!requestFingerprint) return false;
-      const rawStable = String(candidate.logicalMediaId || candidate.stableMediaId || CORE.stableMediaIdentity(url, requestFingerprint) || "").trim();
+      const rawStable = scopedMediaId(CORE.stableMediaIdentity(url, requestFingerprint), candidate.frameId);
       if (!rawStable) return false;
-      const parentStable = String(candidate.parentStableMediaId || (candidate.parentManifestUrl ? CORE.stableMediaIdentity(candidate.parentManifestUrl) : "") || "").trim();
+      const parentStable = scopedMediaId(candidate.parentStableMediaId || (candidate.parentManifestUrl ? CORE.stableMediaIdentity(candidate.parentManifestUrl) : ""), candidate.frameId);
       let stableMediaId = this.rootIdentity(numericTabId, parentStable || rawStable);
 
       const manifestText = String(candidate.manifestText || "");
       const hls = manifestText && CORE.parseHlsRelationships ? CORE.parseHlsRelationships(manifestText, url) : null;
-      if (hls && hls.isHls && hls.master) {
+      const dash = manifestText && CORE.parseDashRelationships ? CORE.parseDashRelationships(manifestText, url) : null;
+      const graph = hls && hls.isHls ? hls : dash && dash.isDash ? dash : null;
+      if (graph && graph.master) {
         // Keep the master's identity authoritative. Child aliases are installed by absorb()
         // after any already-retained child row has been merged into the master.
         stableMediaId = rawStable;
@@ -191,25 +204,29 @@
       const previousConfidence = Number(previous.confidence || 0);
       const mergedQuality = candidate.quality === "strong" || previous.quality === "strong" ? "strong" : (candidate.quality || previous.quality || "possible");
       const sameRequest = previous.requestFingerprint === requestFingerprint;
-      // XAR10: a signed URL candidate with a new request fingerprint carries a new executable
-      // exact URL and header proof. Do not keep the previous signed exact URL while adopting
-      // newer request headers/fingerprints.
-      const exactRequestUrl = sameRequest ? (previous.url || url) : url;
-      const mergedHeaders = sameRequest
+      const incomingGeneration = Number(candidate.requestGeneration || 0);
+      const previousGeneration = Number(previous.requestGeneration || 0);
+      // Delayed page/response callbacks must never roll a fresh signed URL and
+      // its privileged headers backwards to a stale attempt. Structural hints
+      // may still enrich the logical row without replacing request authority.
+      const staleRequest = Boolean(previous.requestFingerprint) && !sameRequest &&
+        previousGeneration > 0 && incomingGeneration < previousGeneration;
+      const exactRequestUrl = staleRequest ? previous.url : sameRequest ? (previous.url || url) : url;
+      const mergedHeaders = staleRequest ? Object.assign({}, previous.headers || {}) : sameRequest
         ? Object.assign({}, previous.headers || {}, candidate.headers || {})
         : Object.assign({}, candidate.headers || {});
-      const mergedHandoff = sameRequest
+      const mergedHandoff = staleRequest ? Object.assign({}, previous.browserHandoff || {}) : sameRequest
         ? Object.assign({}, previous.browserHandoff || {}, candidate.browserHandoff || {})
         : Object.assign({}, candidate.browserHandoff || {});
       const merged = {
-        url: hls && hls.master ? url : exactRequestUrl,
-        canonicalUrl: CORE.logicalMediaUrl(hls && hls.master ? url : (previous.canonicalUrl || exactRequestUrl)),
+        url: exactRequestUrl,
+        canonicalUrl: CORE.logicalMediaUrl(previous.canonicalUrl || exactRequestUrl),
         logicalMediaId: stableMediaId,
         contentType: candidate.contentType || previous.contentType || "",
         contentLength: Math.max(Number(candidate.contentLength || 0), Number(previous.contentLength || 0)),
         requestType: candidate.requestType || previous.requestType || "",
-        frameId: Number.isFinite(Number(candidate.frameId)) ? Number(candidate.frameId) : Number(previous.frameId || 0),
-        frameUrl: candidate.frameUrl || previous.frameUrl || "",
+        frameId: staleRequest ? Number(previous.frameId || 0) : (Number.isFinite(Number(candidate.frameId)) ? Number(candidate.frameId) : Number(previous.frameId || 0)),
+        frameUrl: staleRequest ? previous.frameUrl || "" : candidate.frameUrl || previous.frameUrl || "",
         pageUrl: candidate.pageUrl || previous.pageUrl || "",
         title: candidate.title || previous.title || "",
         durationMs: Math.max(0, Number(candidate.durationMs || previous.durationMs || 0)),
@@ -217,28 +234,28 @@
         thumbnailProvenance: candidate.thumbnailProvenance || previous.thumbnailProvenance || "Unknown",
         contentDisposition: candidate.contentDisposition || previous.contentDisposition || "",
         source: candidate.source || previous.source || "network",
-        requestId: candidate.requestId || previous.requestId || "",
-        requestFingerprint,
-        requestGeneration: Number(candidate.requestGeneration || previous.requestGeneration || 0),
+        requestId: staleRequest ? previous.requestId || "" : candidate.requestId || previous.requestId || "",
+        requestFingerprint: staleRequest ? previous.requestFingerprint : requestFingerprint,
+        requestGeneration: staleRequest ? previousGeneration : Number(candidate.requestGeneration || previous.requestGeneration || 0),
         headers: mergedHeaders,
         browserHandoff: mergedHandoff,
         stableMediaId,
-        requestEvidenceCount: Math.min(64, Number(previous.requestEvidenceCount || 0) + (sameRequest ? 0 : 1)),
+        requestEvidenceCount: Math.min(64, Number(previous.requestEvidenceCount || 0) + (sameRequest || staleRequest ? 0 : 1)),
         observationCount: Math.min(1000000, Number(previous.observationCount || 0) + 1),
-        segmentCount: Number(previous.segmentCount || 0) + Number(candidate.segmentCount || 0) + Number(hls && hls.segments.length || 0),
-        variantUrls: [...new Set([...(previous.variantUrls || []), ...(hls ? hls.childPlaylists : []), ...(candidate.variantUrls || [])])].slice(0, 32),
-        trackUrls: [...new Set([...(previous.trackUrls || []), ...(hls ? hls.mediaTracks : []), ...(candidate.trackUrls || [])])].slice(0, 32),
-        variantInfo: mergeObjectArray(previous.variantInfo, [...(hls ? hls.variantInfo : []), ...(candidate.variantInfo || [])], item => item && item.url, 32),
-        trackInfo: mergeObjectArray(previous.trackInfo, [...(hls ? hls.trackInfo : []), ...(candidate.trackInfo || [])], item => item && `${item.type || "track"}|${item.groupId || ""}|${item.url || ""}`, 32),
-        manifestRole: hls && hls.master ? "master" : (candidate.manifestRole || previous.manifestRole || (candidate.manifest ? "media" : "resource")),
-        encryptedAes128: Boolean(previous.encryptedAes128 || hls && hls.encryptedAes128 || candidate.encryptedAes128),
-        protectedMedia: Boolean(previous.protectedMedia || hls && hls.protectedMedia || candidate.protectedMedia),
-        lowLatency: Boolean(previous.lowLatency || hls && hls.lowLatency || candidate.lowLatency),
+        segmentCount: Number(previous.segmentCount || 0) + Number(candidate.segmentCount || 0) + Number(graph && graph.segments.length || 0),
+        variantUrls: [...new Set([...(previous.variantUrls || []), ...(graph ? graph.childPlaylists : []), ...(candidate.variantUrls || [])])].slice(0, 32),
+        trackUrls: [...new Set([...(previous.trackUrls || []), ...(graph ? graph.mediaTracks : []), ...(candidate.trackUrls || [])])].slice(0, 32),
+        variantInfo: mergeObjectArray(previous.variantInfo, [...(graph ? graph.variantInfo : []), ...(candidate.variantInfo || [])], item => item && `${item.url}|${item.representationId || ""}`, 32),
+        trackInfo: mergeObjectArray(previous.trackInfo, [...(graph ? graph.trackInfo : []), ...(candidate.trackInfo || [])], item => item && `${item.type || "track"}|${item.groupId || ""}|${item.url || ""}|${item.representationId || ""}`, 32),
+        manifestRole: graph && graph.master ? "master" : (candidate.manifestRole || previous.manifestRole || (candidate.manifest ? "media" : "resource")),
+        encryptedAes128: Boolean(previous.encryptedAes128 || graph && graph.encryptedAes128 || candidate.encryptedAes128),
+        protectedMedia: Boolean(previous.protectedMedia || graph && graph.protectedMedia || candidate.protectedMedia),
+        lowLatency: Boolean(previous.lowLatency || graph && graph.lowLatency || candidate.lowLatency),
         sessionRevision: Math.max(Number(candidate.sessionRevision || 0), Number(previous.sessionRevision || 0), Date.now()),
         quality: mergedQuality,
         confidence: Math.max(nextConfidence, previousConfidence),
         reason: nextConfidence >= previousConfidence ? (candidate.reason || previous.reason || "media") : (previous.reason || candidate.reason || "media"),
-        manifest: Boolean(candidate.manifest || previous.manifest || hls && hls.isHls),
+        manifest: Boolean(candidate.manifest || previous.manifest || graph && (graph.isHls || graph.isDash)),
         bodyDerived: Boolean(candidate.bodyDerived || previous.bodyDerived),
         playbackObserved: Boolean(candidate.playbackObserved || previous.playbackObserved),
         autoOffer: Boolean(candidate.autoOffer || previous.autoOffer),
@@ -246,9 +263,9 @@
       };
       bucket.set(stableMediaId, merged);
 
-      if (hls && hls.isHls && hls.master) {
-        for (const childUrl of [...hls.childPlaylists, ...hls.mediaTracks]) {
-          const childId = CORE.stableMediaIdentity(childUrl);
+      if (graph && graph.master) {
+        for (const childUrl of [...graph.childPlaylists, ...graph.mediaTracks]) {
+          const childId = scopedMediaId(CORE.stableMediaIdentity(childUrl), candidate.frameId);
           if (childId) this.absorb(numericTabId, stableMediaId, childId);
         }
       }
@@ -256,6 +273,20 @@
       this.buckets.set(numericTabId, bucket);
       this.trim(numericTabId);
       return true;
+    }
+
+    clearFrame(tabId, frameId) {
+      const key = Number(tabId);
+      const frame = evidenceFrameId({ frameId });
+      const bucket = this.buckets.get(key);
+      if (bucket) for (const [id, candidate] of bucket) {
+        if (evidenceFrameId(candidate) === frame) bucket.delete(id);
+      }
+      const aliases = this.aliases.get(key);
+      if (aliases) for (const [child, parent] of aliases) {
+        if (child.endsWith(`@frame:${frame}`) || parent.endsWith(`@frame:${frame}`)) aliases.delete(child);
+      }
+      this.clearDocumentEvidence(key, frame);
     }
 
     trim(tabId) {

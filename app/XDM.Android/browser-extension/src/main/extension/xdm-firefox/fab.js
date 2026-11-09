@@ -260,6 +260,7 @@
     const parts = [];
     const kind = String(candidate && candidate.streamKind || "media").toUpperCase();
     if (kind) parts.push(kind);
+    parts.push(candidate && candidate.quality === "strong" ? "Strong evidence" : "Possible · review");
     const ext = extensionFor(candidate);
     if (ext && ext !== kind) parts.push(ext);
     const best = bestVariant(candidate);

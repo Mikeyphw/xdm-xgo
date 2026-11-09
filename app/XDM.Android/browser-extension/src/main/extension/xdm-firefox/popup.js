@@ -126,6 +126,7 @@ function candidateMeta(candidate) {
   const kind = String(candidate.streamKind || "media").toUpperCase();
   if (kind) parts.push(kind);
   const mime = String(candidate.contentType || "").split(";", 1)[0].trim();
+  parts.push(candidate.quality === "strong" ? "Strong evidence" : "Possible · review");
   if (mime) parts.push(mime.replace(/^application\//, "").replace(/^video\//, "").replace(/^audio\//, "").toUpperCase());
 
   const best = bestVariant(candidate);
