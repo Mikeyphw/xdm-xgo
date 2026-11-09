@@ -79,7 +79,7 @@ class RemediationPhase13FinalGateContractTest {
     }
 
     @Test
-    fun browserDirectAddAndDirectV3MediaCaptureRemainSeparateRoutes() {
+    fun browserPublicAddAndEncryptedV2CaptureRemainSeparateRoutes() {
         val handoff = source("browser-extension/src/main/extension/xdm-firefox/handoff.js")
         val bridge = source("browser-extension/src/main/extension/xdm-firefox/frame-bridge.js")
         val detector = source("browser-extension/src/main/extension/xdm-firefox/detector-core.js")
@@ -87,8 +87,16 @@ class RemediationPhase13FinalGateContractTest {
 
         assertTrue(handoff.contains("function buildXdmAdd"))
         assertTrue(handoff.contains("function buildXdmCapture"))
-        assertTrue(handoff.contains("params.set(\"v\", String(CONFIG.contractVersion || 3))"))
-        assertTrue(handoff.contains("params.set(\"url\", url)"))
+        assertTrue(handoff.contains("async function buildCaptureSession"))
+        assertTrue(handoff.contains("params.set(\"v\", \"1\")"))
+        assertTrue(handoff.contains("const pairing = pairedCaptureConfig()"))
+        assertTrue(handoff.contains("`\${scheme}://capture?v=2&sid="))
+        assertTrue(handoff.contains("RSA-OAEP"))
+        assertTrue(handoff.contains("AES-GCM"))
+        assertTrue(handoff.contains("if (hasCredentialHeader(input)) return \"\""))
+        assertFalse(handoff.contains("params.set(\"headers\""))
+        assertFalse(handoff.contains("params.set(\"proposedHeaders\""))
+        assertFalse(handoff.contains("params.set(\"finalHeaders\""))
         assertTrue(bridge.contains("input.prebuiltXdmLink || (allowDirectAdd ? builtLinks.xdm : \"\")"))
         assertTrue(detector.contains("HARD_NON_MEDIA_MIME_RE"))
         assertTrue(bridgeTest.contains("direct-v3 XDM handoff"))

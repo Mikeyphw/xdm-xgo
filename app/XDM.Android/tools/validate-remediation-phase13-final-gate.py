@@ -107,14 +107,54 @@ require("download?.state == DownloadState.Failed && download.backend == BackendT
 require("plan.strategy == MediaDownloadStrategy.YtDlp" in execution, "execution failure classification is not strategy based")
 require("errorMessage?.contains(" not in execution, "execution classification still parses error-message substrings")
 
-# Final browser-handoff harmony: manual Add stays separate from evidence-gated direct-v3 media capture.
-require("function buildXdmAdd" in handoff and '`${scheme}://add?${params.toString()}`' in handoff, "browser direct-add compatibility route is missing")
-require("function buildXdmCapture" in handoff and 'params.set("v", String(CONFIG.contractVersion || 3))' in handoff, "direct-v3 media capture builder is missing")
-require('params.set("url", url)' in handoff, "direct-v3 media capture does not carry the selected exact media URL")
-require("sanitizeHeaderBag" in handoff and 'params.set("headers", blocks.rawHeaders)' in handoff, "direct-v3 media capture does not bound/sanitize replay headers")
+# Final browser-handoff harmony: public Add v1 stays separate from app-instance-
+# paired encrypted capture v2. Historical plaintext capture v3 is NEVER executable.
+add_builder = handoff.split("function buildXdmAdd", 1)[-1].split("function buildXdmCapture", 1)[0]
+fallback_builder = handoff.split("function buildXdmCapture", 1)[-1].split("function compactSessionCandidate", 1)[0]
+capture_builder = handoff.split("async function buildCaptureSession", 1)[-1].split("async function buildEncryptedCaptureSession", 1)[0]
+require("function buildXdmAdd" in handoff and 'params.set("v", "1")' in add_builder
+        and 'params.set("url", url)' in add_builder
+        and '`${scheme}://add?${params.toString()}`' in add_builder,
+        "public-only Add v1 route is missing")
+require("function buildXdmCapture" in handoff and 'if (hasCredentialHeader(input)) return ""' in fallback_builder
+        and "return buildXdmAdd(input)" in fallback_builder and "function publicUrl" in handoff,
+        "unpaired browser fallback does not reject credential-bearing captures")
+require("async function buildCaptureSession" in handoff and "const pairing = pairedCaptureConfig()" in capture_builder
+        and "if (!pairing)" in capture_builder and "return buildXdmCapture" in capture_builder,
+        "authenticated media is not gated by app-exported XPI pairing")
+for marker in ('RSA-OAEP', 'AES-GCM', "globalThis.crypto.subtle",
+               'subtle.encrypt({ name: "RSA-OAEP"', 'subtle.encrypt({ name: "AES-GCM"',
+               "const clear = new TextEncoder().encode(JSON.stringify(message))",
+               "candidates: sourceCandidates.slice(0, count)",
+               "const iv = globalThis.crypto.getRandomValues(new Uint8Array(12))",
+               'additionalData: aad, tagLength: 128',
+               'const uri = `${scheme}://capture?v=2&sid=',
+               '`&kid=', '`&ek=', '`&iv=', '`&ct=',
+               'if (new TextEncoder().encode(uri).length <= 64 * 1024) return uri'):
+    require(marker in capture_builder, f"encrypted capture v2 is missing {marker}")
+# Only transport metadata (sid/kid/wrapped key/nonce/ciphertext) may appear in the
+# navigation URI. The actual request URL and headers are inside authenticated JSON.
+navigation_envelope = capture_builder.split("const uri = ", 1)[-1].split(
+    "if (new TextEncoder().encode(uri)", 1)[0]
+require("const uri = " in capture_builder and "url=" not in navigation_envelope
+        and "headers=" not in navigation_envelope and "candidates=" not in navigation_envelope,
+        "capture navigation URI exposes private URL/headers/candidates")
+for forbidden in ('params.set("headers"', 'params.set("proposedHeaders"',
+                  'params.set("finalHeaders"', 'params.set("candidates"'):
+    require(forbidden not in handoff, f"plaintext navigation serializer forbidden: {forbidden}")
+# Require real Node behavioral checks, not just matching a crypto symbol.
+secure_test = text("browser-extension/tests/test_secure_handoff.js")
+release_test = text("browser-extension/tests/test_release_gate.js")
+for marker in ("webcrypto.subtle.decrypt", "json.candidates[0].url,sensitive",
+               "json.candidates[0].finalHeaders.authorization",
+               "json.candidates[1].finalHeaders,undefined"):
+    require(marker in secure_test, f"encrypted-capture regression missing: {marker}")
+for marker in ("captureKeyId", 'safe.startsWith("xdmdownload://add?v=1&")',
+               'assert(!safe.includes("headers="))'):
+    require(marker in release_test, f"public-only fallback regression missing: {marker}")
 require("allowDirectAdd = Boolean(input.manualAdd || isProbe)" in bridge, "manual/page/probe direct-add boundary is missing")
 require('input.prebuiltXdmLink || (allowDirectAdd ? builtLinks.xdm : "")' in bridge, "detected media is not separated from direct-add handoff")
-require("direct-v3 XDM handoff" in bridge_test, "browser bridge regression test does not exercise direct-v3 media rendering")
+require("direct-v3 XDM handoff" in bridge_test, "legacy browser bridge regression evidence missing")
 
 # M-048/M-001: final gate is executable and part of non-deferred Devtool validation.
 require('tasks.register<Exec>("finalRemediationStaticGate")' in build, "Gradle final static-gate task missing")
