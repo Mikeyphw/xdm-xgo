@@ -30,19 +30,31 @@ output="$(adb -s "$serial" shell am instrument -w -r -e class com.mikeyphw.xdm.a
 status=$?
 set -e
 printf '%s\n' "$output"
+evidence_dir="${RUNNER_TEMP:?}/xdm-x86_64-apk"
+mkdir -p "$evidence_dir"
+printf '%s\n' "$output" > "$evidence_dir/jni-instrumentation.txt"
 if (( status != 0 )) || ! grep -Eq 'OK \(1 test\)' <<<"$output"; then
   adb -s "$serial" logcat -d -t 250 '*:E' >&2 || true
   echo XGO_X86_JNI_INSTRUMENTATION_FAILED >&2; exit 2
 fi
-python3 -B - "$receipt" <<'PY'
-import json,sys
-from pathlib import Path
-p=Path(sys.argv[1]);d=json.loads(p.read_text())
-d.update(status='EMULATOR_X86_64_APP_JNI_PASS',jni_instrumentation_tests=1,app_process_launched=True,
-         optional_arm64_only_media_backends_qualified=False)
-p.write_text(json.dumps(d,sort_keys=True,indent=2)+'\n')
-PY
+# XP03B: launch real Compose UI and exported review routing tests in the manual-only x86 lane.
+run_ui_suite() {
+  local label="$1" selector="$2" transcript rc
+  set +e
+  transcript="$(adb -s "$serial" shell am instrument -w -r -e class "$selector"     com.mikeyphw.xdm.android.debug.test/androidx.test.runner.AndroidJUnitRunner 2>&1)"
+  rc=$?
+  set -e
+  printf '%s\n' "$transcript" | tee "$evidence_dir/${label}-instrumentation.txt"
+  if (( rc != 0 )); then
+    adb -s "$serial" logcat -d -t 250 '*:E' >&2 || true
+    echo "XGO_XP03B_${label}_COMMAND_FAILED" >&2
+    exit 2
+  fi
+}
+run_ui_suite compose 'com.mikeyphw.xdm.android.AppSmokeTest'
+run_ui_suite routing 'com.mikeyphw.xdm.android.ExternalControlSecurityInstrumentedTest#exportedAutomationResolvesOnlyToReviewGate'
+python3 -B "$root/scripts/verify_xgo_x86_ui_runs.py"   --jni "$evidence_dir/jni-instrumentation.txt"   --compose "$evidence_dir/compose-instrumentation.txt"   --routing "$evidence_dir/routing-instrumentation.txt"   --receipt "$receipt"
 mkdir -p "${RUNNER_TEMP:?}/xdm-x86_64-apk"
 cp "$apk" "${RUNNER_TEMP:?}/xdm-x86_64-apk/xdm-android-x86_64-debug.apk"
 printenv GITHUB_SHA >/dev/null
-printf 'XGO_X86_EMULATOR_APP_JNI_PASS: genuine x86_64 APK installed, launched and JNI called\n'
+printf 'XGO_XP03B_EMULATOR_JNI_AND_UI_PASS: 1 JNI, 4 Compose, 1 exported-route tests passed\n'
