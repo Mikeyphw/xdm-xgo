@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Current source-of-truth contracts for 1DM-style media locator parity and keyless XPI v3."""
+"""1DM-style media locator parity with MP01 app-paired encrypted Firefox capture."""
 from pathlib import Path
 import sys
 
@@ -45,18 +45,25 @@ parity_test = read("app/src/test/kotlin/com/mikeyphw/xdm/android/MediaLocatorPar
 workflow = (REPO / ".github/workflows/android.yml").read_text(encoding="utf-8", errors="replace")
 project_manifest = read("PROJECT_MANIFEST.json")
 
-# Keyless v3 generation, with v2 reader retained only for migration.
+# MP01: v3 still names the detection/model generation, but browser media capture
+# MUST use app-instance-paired encrypted v2 transport. v3 capture navigation is
+# categorically rejected. Public URLs may still use the v1 Add review.
 for token in ('CurrentVersion = 3', 'EncryptedCaptureVersion = 2'):
-    need(contract, token, "deep-link contract")
-for token in ('params.set("v"', 'params.set("url"', 'params.set("length"', 'params.set("durationMs"', 'params.set("thumbnail"', 'sanitizeHeaderBag'):
-    need(handoff, token, "direct v3 handoff")
-for token in ('captureKeyId', 'capturePublicKeySpki', 'captureOaepHash'):
-    forbid(config, token, "generated extension config")
-for token in ('params.set("kid"', 'params.set("ek"', 'params.set("iv"', 'params.set("ct"', 'crypto.subtle'):
-    forbid(handoff, token, "new v3 handoff")
-need(parser, 'EncryptedCaptureVersion -> parseEncryptedCaptureEnvelope', "legacy v2 migration parser")
-need(parser, 'CurrentVersion -> parseDirectPayload', "v3 direct parser")
-need(payload, 'hasEncryptedCaptureEnvelope', "legacy v2 payload")
+    need(contract, token, "deep-link version contract")
+for token in ('params.set("v"', 'params.set("url"', 'sanitizeHeaderBag',
+              'pairedCaptureConfig', 'crypto.subtle', 'RSA-OAEP', 'AES-GCM',
+              '://capture?v=2&sid=', '&kid=', '&ek=', '&iv=', '&ct='):
+    need(handoff, token, "paired encrypted-v2 Firefox capture")
+need(config, '@@CAPTURE_PAIRING_CONFIG@@', "app-paired extension export template")
+for token in ('params.set("headers"', 'params.set("proposedHeaders"',
+              'params.set("finalHeaders"', 'params.set("candidates"'):
+    forbid(handoff, token, "plaintext credential or candidate navigation")
+for token in ('contentLength:', 'durationMs:', 'thumbnailUrl:'):
+    need(handoff, token, "media metadata preserved inside encrypted envelope")
+need(parser, 'EncryptedCaptureVersion -> parseEncryptedCaptureEnvelope', "encrypted capture parser")
+need(parser, 'XdmBrowserDeepLinkContract.CurrentVersion ->', "legacy v3 capture rejection")
+need(parser, 'XdmBrowserDeepLinkRejection.UnsafeEnvelope', "legacy plaintext capture rejection")
+need(payload, 'hasEncryptedCaptureEnvelope', "encrypted capture model")
 forbid(export_models, 'appVersion != metadata.appVersion', "XPI staleness")
 need(legacy, 'Legacy v2 browser capture key no longer matches this app install.', "legacy-key migration guidance")
 
@@ -72,12 +79,19 @@ for token in ('"accept-language"', '"authorization"', '"cookie"', '"referer"', '
     need(parser, token, "Android v3 replay header allowlist")
 need(observer, '"accept-language"', "privileged webRequest header capture")
 need(page_sniffer, '"accept-language"', "page-side visible header capture")
-need(release_test, 'missing thumbnail must not resolve to the page URL', "metadata release regression")
-need(release_test, 'thumbnailUrl:"https://cdn.example/poster.jpg"', "explicit thumbnail release regression")
-need(parser_test, 'extensionCaptureParsesOptionalSizeDurationAndThumbnailMetadata', "v3 parser metadata regression")
-need(phase5_extension_test, 'SerializesOnlySanitizedAllowlistedReplayContext', "Phase-5 v3 header contract regression")
-need(phase5_extension_test, 'assertTrue(handoff.contains("params.set(\\"headers\\""))', "Phase-5 direct-v3 replay-header contract")
-forbid(phase5_extension_test, 'assertFalse(handoff.contains("params.set(\\"headers\\""))', "obsolete encrypted-v2 header privacy assertion")
+# Preserve metadata and final-sent-header evidence inside ciphertext, never
+# via the Android URI query. The executable crypto round trip is tested in Node.
+secure_test = read("browser-extension/tests/test_secure_handoff.js")
+need(release_test, 'assert(!safe.includes("headers="))', "public Add privacy regression")
+need(release_test, 'assert.equal(unsigned,"")', "unpaired signed-capture fail-closed regression")
+for token in ('json.candidates[0].url,sensitive',
+              'json.candidates[0].finalHeaders.authorization',
+              'RSA-OAEP', 'AES-GCM', 'xdm-capture-v2|forged'):
+    need(secure_test, token, "encrypted capture confidentiality/integrity regression")
+need(parser_test, 'extensionCaptureParsesOptionalSizeDurationAndThumbnailMetadata', "metadata parser regression")
+need(phase5_extension_test, 'SerializesOnlySanitizedAllowlistedReplayContext', "Phase-5 evidence retention regression")
+need(phase5_extension_test, 'assertFalse(handoff.contains("params.set(\\"headers\\""))', "Phase-5 plaintext navigation rejection")
+forbid(phase5_extension_test, 'assertTrue(handoff.contains("params.set(\\"headers\\""))', "retired plaintext-v3 test assertion")
 
 # False-positive controls and evidence promotion.
 for token in ('HARD_NON_MEDIA_MIME_RE', 'possible-manifest-extension', 'manifestByMime', 'manifestByExtension'):
