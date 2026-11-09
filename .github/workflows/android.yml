@@ -25,6 +25,8 @@ on:
       - 'scripts/verify_xgo_x86_apk.py'
       - 'scripts/run_xgo_x86_64_emulator.sh'
       - 'scripts/test_xgo_mp01_hf04_ci_tiers.py'
+      - 'scripts/test_xgo_xpi_v161_parity.py'
+      - 'scripts/test_xgo_mp01_hf05_xpi_guard.py'
   pull_request:
     paths:
       - 'app/XDM.Android/**'
@@ -47,6 +49,8 @@ on:
       - 'scripts/verify_xgo_x86_apk.py'
       - 'scripts/run_xgo_x86_64_emulator.sh'
       - 'scripts/test_xgo_mp01_hf04_ci_tiers.py'
+      - 'scripts/test_xgo_xpi_v161_parity.py'
+      - 'scripts/test_xgo_mp01_hf05_xpi_guard.py'
     types: [opened, reopened, synchronize, labeled, unlabeled, ready_for_review]
   workflow_dispatch:
     inputs:
@@ -107,6 +111,13 @@ jobs:
           for suite in test_detector.js test_handoff.js test_secure_handoff.js test_fab.js test_phase43a_bridge.js test_background.js test_release_gate.js; do
             node "browser-extension/tests/$suite"
           done
+      - name: XP01 canonical XPI, encrypted transport, and historical provenance (no Gradle)
+        working-directory: .
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B scripts/test_xgo_xpi_v161_parity.py
+          python3 -B scripts/test_xgo_mp01_hf05_xpi_guard.py
       - name: Hotfix/full CI gating contract
         working-directory: .
         run: python3 -B scripts/test_xgo_mp01_hf04_ci_tiers.py
