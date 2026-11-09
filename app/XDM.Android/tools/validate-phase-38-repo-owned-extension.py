@@ -49,10 +49,11 @@ if manifest.get("content_scripts", [{}])[0].get("all_frames") is not True:
     ERRORS.append("extension must collect from all frames")
 
 handoff = require(Path("browser-extension/src/main/extension/xdm-firefox/handoff.js"))
-for token in ('`${scheme}://capture?${params.toString()}`', 'params.set("v"', 'params.set("url"', 'buildCaptureSession', 'sanitizeHeaderBag', 'scheme=idmdownload', 'package=idm.internet.download.manager.plus'):
-    if token not in handoff: ERRORS.append(f"direct-v3 handoff contract missing {token}")
-for token in ('params.set("kid"', 'params.set("ek"', 'params.set("iv"', 'params.set("ct"', "crypto.subtle"):
-    if token in handoff: ERRORS.append(f"new keyless v3 handoff must not contain legacy crypto token {token}")
+for token in ('`${scheme}://capture?v=2', 'params.set("v"', 'params.set("url"', 'buildCaptureSession', 'sanitizeHeaderBag', 'scheme=idmdownload', 'package=idm.internet.download.manager.plus', 'AES-GCM', 'RSA-OAEP'):
+    if token not in handoff: ERRORS.append(f"MP01 encrypted browser handoff contract missing {token}")
+# Encrypted captures are app-paired; plaintext credentials in a navigation URI are forbidden.
+for token in ('params.set("headers"', 'params.set("proposedHeaders"', 'params.set("finalHeaders"'):
+    if token in handoff: ERRORS.append(f"MP01 plaintext navigation header token {token}")
 for token in ("extra_cookies", "extra_authorization", "extra_headers", "proxy-authorization"):
     if token in handoff: ERRORS.append(f"XDM custom URI must not carry legacy unrestricted field {token}")
 

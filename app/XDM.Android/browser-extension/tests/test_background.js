@@ -168,7 +168,15 @@ assert.strictEqual(events.message.listeners.length, 1, "page observation receive
   }, { tab: { id: 8 }, frameId: 9, url: "https://embed.example/player" });
 
   await new Promise(resolve => setTimeout(resolve, 700));
-  assert.ok(executeCalls.some(call => call.tabId === 8 && String(call.options.code || "").includes("master.m3u8")), "privileged request evidence can be enriched by page hint and dispatched");
+  const injectedForTab8 = executeCalls.filter(call => call.tabId === 8)
+    .map(call => String(call.options.code || "")).join("\n");
+  assert.ok(injectedForTab8.includes("offerNetwork") &&
+    injectedForTab8.includes("xdm-detected-media.m3u8"),
+    "privileged request evidence must offer an opaque media hint, not the signed URL");
+  assert.ok(!injectedForTab8.includes("token=abc") &&
+    !injectedForTab8.includes("Bearer privileged-header") &&
+    !injectedForTab8.includes("Authorization") && !injectedForTab8.includes("Cookie"),
+    "the page-injected offer must never contain credentials or request headers");
   diagnostics = storageState.xdmNetworkDiagnosticsV1;
   assert.ok(diagnostics && diagnostics["8"]);
   assert.ok(!JSON.stringify(diagnostics["8"]).includes("forged-page-secret"), "page-supplied headers never become privileged diagnostics/handoff evidence");

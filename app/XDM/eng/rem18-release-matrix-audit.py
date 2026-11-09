@@ -89,7 +89,10 @@ def main() -> int:
         "XDM-Firefox.xpi",
         "xdm-android-media-bridge@mikeyphw",
         "action == \"add\" && version != 1",
-        "action == \"capture\" && version != 3",
+        # MP01 desktop must refuse ANY capture navigation, not just v3.
+        # Android-paired encrypted v2 is handled only inside the Android Keystore.
+        "|| action == \"capture\")",
+        "Encrypted browser captures require the paired Android app",
         "x-scheme-handler/xdmdownload",
     ]
     combined_all = "\n".join(files.values())

@@ -207,73 +207,25 @@ class XdmBrowserDeepLinkParserTest {
 
     @Test
     fun extensionCaptureParsesOptionalSizeDurationAndThumbnailMetadata() {
-        val raw = "xdmdownload://capture?v=3&url=https%3A%2F%2Fcdn.example%2Fvideo.mp4&kind=video&length=734003200&durationMs=630000&thumbnail=https%3A%2F%2Fcdn.example%2Fposter.jpg"
-        val payload = XdmBrowserDeepLinkParser.parse(raw, "xdmdownload")!!
-
-        assertEquals(3, payload.version)
-        assertEquals(734003200L, payload.contentLength)
-        assertEquals(630000L, payload.durationMs)
-        assertEquals("https://cdn.example/poster.jpg", payload.thumbnailUrl)
-        val draft = payload.toAutomationCommandDraft()
-        assertEquals(734003200L, draft.contentLength)
-        assertEquals(630000L, draft.durationMs)
-        assertEquals("https://cdn.example/poster.jpg", draft.thumbnailUrl)
+        val raw = "xdmdownload://capture?v=3&url=https%3A%2F%2Fcdn.example%2Fvideo.mp4"
+        val result = XdmBrowserDeepLinkParser.parseDetailed(raw, "xdmdownload")
+        assertEquals(XdmBrowserDeepLinkRejection.UnsafeEnvelope, (result as XdmBrowserDeepLinkParseResult.Rejected).reason)
     }
 
     @Test
     fun directV3CaptureSessionRetainsBoundedCandidateBatchMetadata() {
-        val candidates = """[{"url":"https://cdn.example/master.m3u8","requestFingerprint":"req-one-12345678"},{"url":"https://cdn.example/video.mp4","requestFingerprint":"req-two-12345678"}]"""
-        val raw = "xdmdownload://capture?" + listOf(
-            "v=3",
-            "url=${encode("https://cdn.example/master.m3u8")}",
-            "page=${encode("https://watch.example/episode")}",
-            "sid=tab-7-session",
-            "sessionRevision=42",
-            "candidateCount=5",
-            "truncated=1",
-            "candidates=${encode(candidates)}",
-        ).joinToString("&")
-
-        val payload = XdmBrowserDeepLinkParser.parse(raw, "xdmdownload")!!
-        assertTrue(payload.hasDirectCaptureSession)
-        assertEquals("tab-7-session", payload.captureSessionId)
-        assertEquals(42L, payload.sessionRevision)
-        assertEquals(5, payload.totalCandidateCount)
-        assertTrue(payload.truncatedCandidates)
-        assertEquals(candidates, payload.directCandidatesJson)
+        val unsafe = "xdmdownload://capture?v=3&url=https%3A%2F%2Fcdn.example%2Fmaster.m3u8" +
+            "&" + "candidates=%5B%5D&sid=browser-session-12345678"
+        val result = XdmBrowserDeepLinkParser.parseDetailed(unsafe, "xdmdownload")
+        assertEquals(XdmBrowserDeepLinkRejection.UnsafeEnvelope, (result as XdmBrowserDeepLinkParseResult.Rejected).reason)
     }
 
     @Test
     fun directV3CaptureCarriesExactMediaAndSanitizedSessionHeadersWithoutCryptoBinding() {
-        val rawHeaders = "Referer: https://watch.example/episode\nCookie: session=abc\nX-Injected: no"
-        val proposed = "User-Agent: TestBrowser/1\nAuthorization: Bearer token"
-        val finalHeaders = "Origin: https://watch.example\nRange: bytes=0-"
-        val raw = "xdmdownload://capture?" + listOf(
-            "v=3",
-            "url=${encode("https://cdn.example/media/master.m3u8?token=signed")}",
-            "page=${encode("https://watch.example/episode")}",
-            "mime=${encode("application/vnd.apple.mpegurl")}",
-            "kind=hls",
-            "headers=${encode(rawHeaders)}",
-            "proposedHeaders=${encode(proposed)}",
-            "finalHeaders=${encode(finalHeaders)}",
-        ).joinToString("&")
-
-        val payload = XdmBrowserDeepLinkParser.parse(raw, "xdmdownload")!!
-        assertEquals(3, payload.version)
-        assertEquals(AutomationCommandAction.CaptureMedia, payload.action)
-        assertEquals("https://cdn.example/media/master.m3u8?token=signed", payload.url)
-        assertEquals("https://watch.example/episode", payload.pageUrl)
-        assertEquals("application/vnd.apple.mpegurl", payload.mimeType)
-        assertTrue(!payload.hasEncryptedCaptureEnvelope)
-        assertTrue(payload.rawHeaders.orEmpty().contains("cookie: session=abc"))
-        assertTrue(!payload.rawHeaders.orEmpty().contains("X-Injected"))
-
-        val draft = payload.toAutomationCommandDraft(originPackage = "org.ironfoxoss.ironfox")
-        assertEquals(AutomationCommandSource.BrowserExtension, draft.source)
-        assertEquals("https://cdn.example/media/master.m3u8?token=signed", draft.url)
-        assertTrue(draft.proposedHeaders.orEmpty().contains("authorization: Bearer token"))
-        assertTrue(draft.finalHeaders.orEmpty().contains("range: bytes=0-"))
+        val unsafe = "xdmdownload://capture?v=3&url=https%3A%2F%2Fcdn.example%2Fmaster.m3u8" +
+            "&" + "headers=Cookie%3A%20session%3Dsecret"
+        val result = XdmBrowserDeepLinkParser.parseDetailed(unsafe, "xdmdownload")
+        assertEquals(XdmBrowserDeepLinkRejection.UnsafeEnvelope, (result as XdmBrowserDeepLinkParseResult.Rejected).reason)
     }
 
 }

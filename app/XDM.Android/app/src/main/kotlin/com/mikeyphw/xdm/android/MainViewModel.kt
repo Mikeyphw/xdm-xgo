@@ -1778,15 +1778,37 @@ class MainViewModel(
                 else -> BrowserExtensionSourceContract.Channel.Release
             }
             val resolvedTheme = current.resolvedTheme(preferenceSnapshot.themeMode)
-            val config = BrowserExtensionBuildConfig(
-                extensionVersion = BrowserExtensionSourceContract.DevelopmentVersion,
-                appVersion = BuildConfig.VERSION_NAME,
-                applicationId = BuildConfig.APPLICATION_ID,
-                channel = channel,
-                xdmScheme = BuildConfig.XDM_BROWSER_SCHEME,
-                defaultTarget = current.defaultTarget,
-                themeMode = resolvedTheme,
-            )
+            // MP01: user-exported Firefox XPIs are always app-instance paired.
+            // Only public material is embedded; the private RSA key stays in AndroidKeyStore.
+            // Do not produce a silently keyless XPI if pairing cannot be prepared.
+            val config = runCatching {
+                BrowserExtensionBuildConfig(
+                    extensionVersion = BrowserExtensionSourceContract.DevelopmentVersion,
+                    appVersion = BuildConfig.VERSION_NAME,
+                    applicationId = BuildConfig.APPLICATION_ID,
+                    channel = channel,
+                    xdmScheme = BuildConfig.XDM_BROWSER_SCHEME,
+                    defaultTarget = current.defaultTarget,
+                    themeMode = resolvedTheme,
+                    captureKeyId = browserCaptureEnvelopeManager.keyId,
+                    capturePublicKeySpkiBase64Url = browserCaptureEnvelopeManager.publicKeySpkiBase64Url,
+                    captureOaepHash = browserCaptureEnvelopeManager.captureOaepHash,
+                )
+            }.getOrElse { failure ->
+                val message = BrowserBridgeDiagnosticsRedactor.sanitize(
+                    failure.message ?: "Unable to prepare the app-paired Firefox capture key.",
+                )
+                preferences.recordBrowserBridgeGeneration(
+                    phase = "failed",
+                    message = message,
+                    epochMs = System.currentTimeMillis(),
+                )
+                browserExtensionRuntime.value = BrowserExtensionRuntimeStatus(
+                    phase = BrowserExtensionExportPhase.Failed,
+                    message = message,
+                )
+                return@launch
+            }
             browserExtensionRuntime.value = BrowserExtensionRuntimeStatus(
                 phase = BrowserExtensionExportPhase.Exporting,
                 message = "Generating and validating the Firefox XPI…",

@@ -26,6 +26,29 @@ class XpiReferenceParity(unittest.TestCase):
         for group in ['adoptedAssetSha256','unchangedAssetSha256']:
             for name,digest in self.ref[group].items():
                 self.assertEqual(sha((SRC/name).read_bytes()),digest,name)
+    def test_mp01_encrypted_canonical_and_reference_snapshot_are_distinct(self):
+        # Preserve the user-supplied XP01 provenance while attesting the CURRENT
+        # Android-owned canonical XPI. Signed/credential-bearing captures must
+        # not regress to the historical, plaintext-v3 reference artifact.
+        historical=self.ref['referenceSnapshotBeforeMp01Sha256']
+        self.assertEqual(historical['handoff.js'], '19dd11fba950c20725b6860ed5def908f4e38da7fb179cb458ad70ca066572a2')
+        self.assertEqual(historical['network-observer.js'], '7988d45e1810f750adbe2f5443143cbe0f43ec9d826a4b2b16a6f67611224274')
+        self.assertEqual(historical['generated-config.js'], 'e7c0adc1cf7e6e33e3f6ca6ed72008d83ea1b79923e98fed63681a1c7a02ccff')
+        self.assertNotEqual(historical['handoff.js'], self.ref['adoptedAssetSha256']['handoff.js'])
+        handoff=(SRC/'handoff.js').read_text(encoding='utf-8')
+        for marker in ('async function buildCaptureSession(', 'const pairing = pairedCaptureConfig()',
+                       'const uri = `${scheme}://capture?v=2&sid=', 'subtle.encrypt({ name: "AES-GCM"',
+                       'subtle.encrypt({ name: "RSA-OAEP"', 'if (hasCredentialHeader(input)) return ""'):
+            self.assertIn(marker,handoff)
+        for forbidden in ('params.set("headers"', 'params.set("finalHeaders"', 'params.set("proposedHeaders"'):
+            self.assertNotIn(forbidden,handoff)
+        encrypted=(MODULE/'tests/test_secure_handoff.js').read_text(encoding='utf-8')
+        for marker in ('json.candidates[0].durationMs,630000',
+                       'json.candidates[0].thumbnailUrl,"https://img.example/poster.jpg"',
+                       'json.candidates[0].finalHeaders.authorization,"Bearer private"',
+                       'webcrypto.subtle.decrypt'):
+            self.assertIn(marker,encrypted)
+
     def test_version_channel_and_manifest_restrictions(self):
         build=(MODULE/'build.gradle.kts').read_text()
         contract=(MODULE/'src/main/kotlin/com/mikeyphw/xdm/android/browserextension/BrowserExtensionSourceContract.kt').read_text()
@@ -107,7 +130,12 @@ class XpiReferenceParity(unittest.TestCase):
             self.assertIn(expected,fab)
         for expected in [
             'function requireSingleSelectedCandidate',
-            'const candidate = Object.assign({}, selected, { streamKind: candidateStreamKind(selected) });',
+            'const candidate = Object.assign({}, selected, {',
+            'streamKind: candidateStreamKind(selected),',
+            'browserHandoff: Object.assign({}, selected.browserHandoff || {}, {',
+            'finalHeaders: authoritative ? proof.browserHandoff.finalHeaders : null,',
+            'headers: authoritative ? proof.headers : {},',
+            'await handoff.buildCaptureSession({',
             'candidates: [candidate]',
             'totalCandidateCount: 1',
             'truncated: false',

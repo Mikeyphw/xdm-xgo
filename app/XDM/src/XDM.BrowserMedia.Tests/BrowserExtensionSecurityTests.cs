@@ -54,7 +54,12 @@ public sealed class BrowserExtensionSecurityTests
         Assert.Contains("xdmdownload", source, StringComparison.Ordinal);
         Assert.Contains("proposedHeaders", source, StringComparison.Ordinal);
         Assert.Contains("finalHeaders", source, StringComparison.Ordinal);
-        Assert.Contains("rawHeaders: finalHeaders", source, StringComparison.Ordinal);
+        Assert.Contains("pairedCaptureConfig", source, StringComparison.Ordinal);
+        Assert.Contains("RSA-OAEP", source, StringComparison.Ordinal);
+        Assert.Contains("AES-GCM", source, StringComparison.Ordinal);
+        Assert.Contains("crypto.subtle", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("params.set(\"headers\"", source, StringComparison.Ordinal);
+        Assert.DoesNotContain("params.set(\"candidates\"", source, StringComparison.Ordinal);
     }
 
     [Fact]

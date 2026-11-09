@@ -34,6 +34,7 @@
       motionFastMs: "@@MOTION_FAST@@",
       motionStandardMs: "@@MOTION_STANDARD@@"
     }),
+    @@CAPTURE_PAIRING_CONFIG@@
     bodyInspectionLimit: 786432
   });
 })();

@@ -77,12 +77,22 @@ need_current_room_schema_at_least(vm, 23, "Room schema")
 for token in ("BrowserCaptureSessionHeader", "Browser session values stay private", "XDM kept the highest-confidence results in this handoff"):
     need(screen, token, "captured media inbox")
 need(config, "@@CONTRACT_VERSION@@", "generated extension config")
-for token in ("captureKeyId", "capturePublicKeySpki", "captureOaepHash"):
-    forbid(config, token, "keyless generated extension config")
-for token in ("buildXdmCapture", "buildCaptureSession", 'params.set("url", url)', 'params.set("headers", blocks.rawHeaders)', "sanitizeHeaderBag"):
-    need(handoff, token, "direct-v3 extension handoff")
-for token in ('params.set("ct"', 'params.set("ek"', 'params.set("iv"', "crypto.subtle"):
-    forbid(handoff, token, "new direct-v3 extension handoff")
+# MP01 supersedes the direct-v3 plaintext Firefox transport with paired encrypted-v2.
+# The canonical source still carries Android's v3 detection data model, but the
+# transport URI exposes only sid/kid/wrapped-key/IV/ciphertext and no clear headers.
+need(config, "@@CAPTURE_PAIRING_CONFIG@@", "app-instance XPI pairing template")
+for token in (
+    "buildXdmCapture", "buildCaptureSession", 'params.set("url", url)',
+    "pairedCaptureConfig", "crypto.subtle", "RSA-OAEP", "AES-GCM",
+    '://capture?v=2&sid=', '&kid=', '&ek=', '&iv=', '&ct=',
+    "sanitizeHeaderBag",
+):
+    need(handoff, token, "encrypted-v2 Firefox capture transport")
+for token in ('params.set("headers"', 'params.set("proposedHeaders"',
+              'params.set("finalHeaders"', 'params.set("candidates"'):
+    forbid(handoff, token, "unencrypted browser navigation")
+need(parser, "UnsafeEnvelope", "rejected legacy plaintext-v3 capture")
+need(parser, "XdmBrowserDeepLinkContract.CurrentVersion ->", "rejected legacy plaintext-v3 capture")
 # XP01 v1.6.1: discovery must display the single-choice picker, never prebuild
 # a potentially sensitive capture URI or submit multiple items automatically.
 for token in (

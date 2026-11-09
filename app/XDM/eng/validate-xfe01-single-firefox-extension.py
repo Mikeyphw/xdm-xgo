@@ -19,13 +19,13 @@ EXPECTED_HASHES = {
     "extension.css": "5f9d10da55bea57317d0f01db7a3a06ad4c4a196201a942027e25e751b6d4fcf",
     "fab.js": "b05c1aeacc23c0ab5dc4699dc1de4baf40e34727a91457558d0c5712721fcf16",
     "frame-bridge.js": "06c45a4fea9d098cbd446bd5c98bb69a7c2ccd7047526b8d5fabcb13cf507fa9",
-    "generated-config.template.js": "810cad667e0efff1179b532c2e405d8688fc7df181720c59e588be004c8e1450",
+    "generated-config.template.js": "0cd67c0565d9a1d94c2d8b0efe0e14e9c29565c926babe90208e07b7dac40033",
     "generated-theme.template.css": "b52a7938b8df6faf687e81f0a39899acf2fa89ff19a3d21b6a8508602acef735",
-    "handoff.js": "19dd11fba950c20725b6860ed5def908f4e38da7fb179cb458ad70ca066572a2",
+    "handoff.js": "23b649b98c6b3cbb4fbaa345d2cd654bbdfd6af40ab03eb54a64acfdcc20578e",
     "icons/icon48.png": "1ffad2f3f3e18ce0558fb506deb38c600f1747bb0dc0a5b1ad8c7ea448d8373b",
     "icons/icon96.png": "0f442e4f1c9075c0d8bdbe20a71102fa13bb6e603770010e78e1a87c27a7aa2f",
     "manifest.template.json": "e823a9405bfbbbcdffebefa06ae380ce783c0344e1ade80e6239893c01b47683",
-    "network-observer.js": "7988d45e1810f750adbe2f5443143cbe0f43ec9d826a4b2b16a6f67611224274",
+    "network-observer.js": "d4c938d07d4148e1619ac1c0e8fad122767a46b6407183cbbadcc2df17af7797",
     "page-sniffer.js": "165ca7e2c610b3358b588d6c956ceb773a39d8b81d535a6aaf5f89ec4f74e63a",
     "popup.html": "d0eb8c568390257d470ff09bd61df1e385ebb36401f77bf8883408c26b9e4c31",
     "popup.js": "837effe14e18121aded38b1e40b5af7c97809af93fe9f7752cff63d1764b2f7f",
@@ -82,7 +82,8 @@ def verify_desktop_adapter() -> None:
     parser = text("app/XDM/src/XDM.BrowserIntegration/FirefoxExtensionHandoffParser.cs")
     require(f'CanonicalExtensionId = "{CANONICAL_ID}"' in parser, "desktop parser canonical extension identity mismatch")
     require('ReleaseScheme = "xdmdownload"' in parser and 'DebugScheme = "xdmdownload-debug"' in parser, "desktop parser scheme mismatch")
-    require('action == "add" && version != 1' in parser and 'action == "capture" && version != 3' in parser, "desktop parser does not pin canonical handoff versions")
+    require('action == "add" && version != 1' in parser and '|| action == "capture"' in parser, "desktop public-Add-only handoff policy is missing")
+    require('Encrypted browser captures require the paired Android app' in parser, "desktop does not explicitly reject app-paired captures")
     require("finalHeaders ?? proposedHeaders" not in parser, "proposed Firefox headers can become runtime authority")
     require("Authorization and Range are intentionally not promoted" in parser, "desktop least-privilege replay guard missing")
 
@@ -134,7 +135,7 @@ def main() -> int:
     print("XFE01 single Firefox extension convergence: PASS")
     print("canonical Firefox source files: 16/16 match current Android-owned baseline")
     print("desktop executable Firefox forks remaining: 0")
-    print("desktop handoff contract: add v1 / capture v3")
+    print("desktop handoff contract: public Add v1; paired encrypted v2 is Android-only; plaintext capture v3 rejected")
     return 0
 
 

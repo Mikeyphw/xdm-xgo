@@ -1,10 +1,12 @@
 {
+  "activeCanonicalContract": "MP01 encrypted browser capture v2; public Add v1; no plaintext capture v3",
+  "activeCanonicalSource": "app/XDM.Android/browser-extension/src/main/extension/xdm-firefox",
   "adoptedAssetSha256": {
     "extension.css": "5f9d10da55bea57317d0f01db7a3a06ad4c4a196201a942027e25e751b6d4fcf",
     "fab.js": "b05c1aeacc23c0ab5dc4699dc1de4baf40e34727a91457558d0c5712721fcf16",
     "frame-bridge.js": "06c45a4fea9d098cbd446bd5c98bb69a7c2ccd7047526b8d5fabcb13cf507fa9",
-    "handoff.js": "19dd11fba950c20725b6860ed5def908f4e38da7fb179cb458ad70ca066572a2",
-    "network-observer.js": "7988d45e1810f750adbe2f5443143cbe0f43ec9d826a4b2b16a6f67611224274",
+    "handoff.js": "23b649b98c6b3cbb4fbaa345d2cd654bbdfd6af40ab03eb54a64acfdcc20578e",
+    "network-observer.js": "d4c938d07d4148e1619ac1c0e8fad122767a46b6407183cbbadcc2df17af7797",
     "popup.html": "d0eb8c568390257d470ff09bd61df1e385ebb36401f77bf8883408c26b9e4c31",
     "popup.js": "837effe14e18121aded38b1e40b5af7c97809af93fe9f7752cff63d1764b2f7f"
   },
@@ -17,7 +19,7 @@
     "xdmScheme": "xdmdownload-debug"
   },
   "normalizedGeneratedSha256": {
-    "generated-config.js": "e7c0adc1cf7e6e33e3f6ca6ed72008d83ea1b79923e98fed63681a1c7a02ccff",
+    "generated-config.js": "010c8476b7e8edea7620203d95118f57bdb01b818f58fa7c96ea4e50ebf0e50a",
     "generated-theme.css": "9fd19ce8c9b07369fb719c30491b76cc1af9b85013a4cc371e7d5d57e52cae77",
     "manifest.json": "910c05f7ebb9f1768afa59319f51df19d27f66ddb88c61c97968a931e9d2165b"
   },
@@ -31,6 +33,12 @@
   "reference": "xdm-android-media-bridge@mikeyphw.xpi from user upload",
   "referenceGeneratedConfigVersion": "1.6.0",
   "referenceManifestVersion": "1.6.1",
+  "referenceSnapshotBeforeMp01Sha256": {
+    "generated-config.js": "e7c0adc1cf7e6e33e3f6ca6ed72008d83ea1b79923e98fed63681a1c7a02ccff",
+    "handoff.js": "19dd11fba950c20725b6860ed5def908f4e38da7fb179cb458ad70ca066572a2",
+    "network-observer.js": "7988d45e1810f750adbe2f5443143cbe0f43ec9d826a4b2b16a6f67611224274"
+  },
+  "referenceSnapshotPolicy": "Historical user XPI digests remain immutable in referenceSnapshotBeforeMp01Sha256; adoptedAssetSha256 tracks the active canonical Android XPI.",
   "schema": 1,
   "unchangedAssetSha256": {
     "bridge-selftest.js": "7c442bee5be87e6802e9f82f6fcca88daede13377fbbd70dd6e85216b0022eb6",

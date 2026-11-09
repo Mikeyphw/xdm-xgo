@@ -45,6 +45,21 @@ class BrowserExtensionPackageGeneratorTest {
             assertFalse(configEntry.contains("captureKeyId")); assertFalse(configEntry.contains("capturePublicKeySpki")); assertFalse(configEntry.contains("captureOaepHash"))
         }
     }
+    @Test fun `paired XPI embeds only app public key and matches the app fingerprint`() {
+        val paired = config.copy(
+            captureKeyId="a".repeat(24),
+            capturePublicKeySpkiBase64Url="A".repeat(480),
+            captureOaepHash="SHA-1",
+        )
+        val generated=BrowserExtensionPackageGenerator(::sourceEntry).generate(paired)
+        assertTrue(BrowserExtensionPackageValidator.validate(generated.archiveBytes,paired).valid)
+        val rendered=java.util.zip.ZipInputStream(generated.archiveBytes.inputStream()).use { zip ->
+            var content=""; while(true) { val item=zip.nextEntry?:break; if(item.name=="generated-config.js") { content=zip.readBytes().toString(Charsets.UTF_8); break } }; content
+        }
+        assertTrue(rendered.contains("captureKeyId: \"${paired.captureKeyId}\""))
+        assertTrue(rendered.contains("capturePublicKeySpkiBase64Url:"))
+        assertFalse(rendered.contains("privateKey"))
+    }
     @Test fun `build configuration rejects script-breaking app versions`() {
         assertTrue(runCatching { config.copy(appVersion="bad\nversion") }.isFailure); assertTrue(runCatching { config.copy(appVersion="bad\"version") }.isFailure)
     }
