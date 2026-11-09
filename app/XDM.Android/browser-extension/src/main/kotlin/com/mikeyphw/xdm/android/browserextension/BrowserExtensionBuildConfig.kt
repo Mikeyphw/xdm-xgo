@@ -14,6 +14,10 @@ data class BrowserExtensionBuildConfig(
     val defaultTarget: BrowserExtensionSourceContract.Target = BrowserExtensionSourceContract.Target.Xdm,
     val themeMode: BrowserExtensionSourceContract.ThemeMode = BrowserExtensionSourceContract.ThemeMode.Dark,
     val contractVersion: Int = BrowserExtensionSourceContract.ContractVersion,
+    // Public pairing material is app-instance-specific. The private RSA key stays in AndroidKeyStore.
+    val captureKeyId: String = "",
+    val capturePublicKeySpkiBase64Url: String = "",
+    val captureOaepHash: String = "",
 ) {
     init {
         require(extensionVersionPattern.matches(extensionVersion)) { "Invalid Firefox extension version" }
@@ -21,6 +25,13 @@ data class BrowserExtensionBuildConfig(
         require(applicationIdPattern.matches(applicationId)) { "Invalid application ID" }
         require(schemePattern.matches(xdmScheme)) { "Invalid XDM browser scheme" }
         require(contractVersion == BrowserExtensionSourceContract.ContractVersion) { "Unsupported bridge contract version" }
+        val paired = listOf(captureKeyId, capturePublicKeySpkiBase64Url, captureOaepHash).count(String::isNotBlank)
+        require(paired == 0 || paired == 3) { "Incomplete app-instance browser pairing" }
+        if (paired == 3) {
+            require(captureKeyId.matches(Regex("[a-f0-9]{24}"))) { "Invalid capture public key identifier" }
+            require(capturePublicKeySpkiBase64Url.matches(Regex("[A-Za-z0-9_-]{350,1500}"))) { "Invalid RSA public key material" }
+            require(captureOaepHash == "SHA-1") { "Unsupported AndroidKeyStore OAEP hash" }
+        }
     }
 
     val outputFileName: String

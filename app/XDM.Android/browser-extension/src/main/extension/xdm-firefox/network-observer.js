@@ -175,6 +175,16 @@
     return captured && captured.finalHeadersAvailable ? (captured.finalHeaders || {}) : {};
   }
 
+  function uiOnlyUrl(value) {
+    try {
+      const raw = new URL(String(value || ""));
+      if (!/^https?:$/.test(raw.protocol)) return "";
+      // Preserve only a recognized media extension so detection UI retains its kind.
+      const suffix = raw.pathname.match(/\.(m3u8|mpd|mp4|m4v|webm|mkv|mp3|m4a|aac|ogg|opus)$/i);
+      return `${raw.origin}/xdm-detected-media${suffix ? "." + suffix[1].toLowerCase() : ""}`;
+    } catch (_) { return ""; }
+  }
+
   function sanitizeDiagnosticUrl(value) {
     try {
       const url = new URL(String(value || ""));
@@ -387,12 +397,26 @@
       stableMediaId: candidate.stableMediaId || CORE.stableMediaIdentity(candidate.url, candidate.requestFingerprint),
       requestFingerprint: candidate.requestFingerprint || "",
       sessionRevision: candidate.sessionRevision || session.revision,
-      browserHandoff: candidate.browserHandoff || null,
+      // Never inject cookies or authorization blocks into the page/FAB world.
       captureSessionId: session.id,
       prebuiltXdmLink,
       prebuiltOneDmLink,
       capturedCandidateCount,
     });
+    // candidate was cloned above and contains privileged webRequest evidence.
+    // Strip it BEFORE serializing offerNetwork into top-frame injected code.
+    delete payload.headers;
+    delete payload.browserHandoff;
+    // The chooser obtains the exact media candidate from the background store by ID.
+    // None of these URLs or nested evidence are needed in injected content scripts.
+    payload.url = uiOnlyUrl(candidate.url);
+    payload.tabUrl = uiOnlyUrl(tab.url);
+    payload.pageUrl = uiOnlyUrl(candidate.pageUrl || tab.url);
+    payload.frameUrl = uiOnlyUrl(candidate.frameUrl);
+    payload.thumbnailUrl = "";
+    for (const secret of ["canonicalUrl", "manifestText", "variantUrls", "trackUrls",
+      "variantInfo", "trackInfo", "requestId", "requestGeneration", "exactRequestUrl",
+      "requestHeaders", "finalHeaders", "proposedHeaders"]) delete payload[secret];
     await updateDiagnostics(tabId, payload);
     const offered = await offerInTopFrame(tabId, payload);
     // XAR10: auto-offer suppression is committed only after handoff construction and
@@ -580,7 +604,7 @@
         logicalMediaId: candidate.logicalMediaId || candidate.stableMediaId,
         stableMediaId: candidate.logicalMediaId || candidate.stableMediaId,
         title: candidate.title || "Detected media",
-        url: candidate.canonicalUrl || CORE.logicalMediaUrl(candidate.url),
+        url: uiOnlyUrl(candidate.canonicalUrl || candidate.url),
         streamKind: candidateStreamKind(candidate),
         manifestRole: candidate.manifestRole || (candidate.manifest ? "media" : "resource"),
         quality: candidate.quality || "possible",
@@ -589,8 +613,8 @@
         segmentCount: Number(candidate.segmentCount || 0),
         variantCount: Array.isArray(candidate.variantInfo) && candidate.variantInfo.length ? candidate.variantInfo.length : (Array.isArray(candidate.variantUrls) ? candidate.variantUrls.length : 0),
         trackCount: Array.isArray(candidate.trackInfo) && candidate.trackInfo.length ? candidate.trackInfo.length : (Array.isArray(candidate.trackUrls) ? candidate.trackUrls.length : 0),
-        variantInfo: (candidate.variantInfo || []).map(item => Object.assign({}, item)),
-        trackInfo: (candidate.trackInfo || []).map(item => Object.assign({}, item)),
+        variantInfo: (candidate.variantInfo || []).map(item => Object.assign({}, item, { url: uiOnlyUrl(item.url) })),
+        trackInfo: (candidate.trackInfo || []).map(item => Object.assign({}, item, { url: uiOnlyUrl(item.url) })),
         durationMs: Number(candidate.durationMs || 0),
         contentType: candidate.contentType || "",
         contentLength: Number(candidate.contentLength || 0),
@@ -598,10 +622,10 @@
         source: candidate.source || "",
         requestType: candidate.requestType || "",
         reason: candidate.reason || "",
-        pageUrl: candidate.pageUrl || "",
-        frameUrl: candidate.frameUrl || "",
+        pageUrl: uiOnlyUrl(candidate.pageUrl || ""),
+        frameUrl: uiOnlyUrl(candidate.frameUrl || ""),
         playbackObserved: Boolean(candidate.playbackObserved),
-        thumbnailUrl: candidate.thumbnailUrl || "",
+        thumbnailUrl: "",
         protectedMedia: Boolean(candidate.protectedMedia),
         encryptedAes128: Boolean(candidate.encryptedAes128),
         lowLatency: Boolean(candidate.lowLatency),
@@ -631,7 +655,21 @@
     session.revision = Math.max(Number(session.revision || 0), Number(selected.sessionRevision || 0), Date.now());
     const handoff = globalThis.XdmHandoffV1;
     if (!handoff || typeof handoff.buildCaptureSession !== "function") throw new Error("XDM handoff builder is unavailable.");
-    const candidate = Object.assign({}, selected, { streamKind: candidateStreamKind(selected) });
+    // Use fresh privileged exact-request evidence; never trust page or stale frame
+    // fields as executable Authorization/Cookie headers.
+    const proof = selected.requestId ? findPrivilegedEvidence(tabId, selected.url,
+      {requestId: selected.requestId, frameId: selected.frameId}, 45 * 1000) : null;
+    const authoritative = proof && proof.requestFingerprint === selected.requestFingerprint &&
+      String(proof.requestId || "") === String(selected.requestId || "") &&
+      Number(proof.requestGeneration || 0) === Number(selected.requestGeneration || 0);
+    const candidate = Object.assign({}, selected, {
+      streamKind: candidateStreamKind(selected),
+      browserHandoff: Object.assign({}, selected.browserHandoff || {}, {
+        // Proposed headers are for audit only; never promote them to runtime.
+        finalHeaders: authoritative ? proof.browserHandoff.finalHeaders : null,
+      }),
+      headers: authoritative ? proof.headers : {},
+    });
     const link = await handoff.buildCaptureSession({
       sessionId: session.id,
       revision: session.revision,
@@ -642,7 +680,7 @@
       truncated: false,
       scheme: globalThis.XdmExtensionConfig && globalThis.XdmExtensionConfig.xdmScheme,
     });
-    if (!link) throw new Error("XDM could not build a handoff for the selected media.");
+    if (!link) throw new Error("XDM needs a newly app-paired Firefox XPI for signed or authenticated media. Regenerate it from XDM settings.");
     await browser.tabs.executeScript(Number(tabId), {
       code: `(() => { location.href = ${JSON.stringify(link)}; return true; })();`,
       frameId: 0,

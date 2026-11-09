@@ -28,6 +28,7 @@ NUMBER_FIELDS = {
 
 def render(text: str, values: dict[str, str]) -> str:
     for token, key in TOKENS.items(): text = text.replace(token, str(values[key]))
+    text = text.replace("@@CAPTURE_PAIRING_CONFIG@@", "")
     if any(token in text for token in TOKENS): raise SystemExit("unresolved config template tokens")
     return text
 

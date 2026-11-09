@@ -43,7 +43,11 @@ object XdmBrowserDeepLinkParser {
         if (action == AutomationCommandAction.CaptureMedia) {
             return when (version) {
                 XdmBrowserDeepLinkContract.EncryptedCaptureVersion -> parseEncryptedCaptureEnvelope(version, action, parameters)
-                XdmBrowserDeepLinkContract.CurrentVersion -> parseDirectPayload(version, action, parameters, allowHeaders = true)
+                // MP01: direct-v3 capture links are untrusted navigation. Even ostensibly
+                // public links can hide credentials in page, thumbnail and variant fields.
+                // Safe public-only URLs use the standard v1 Add review, never capture.
+                XdmBrowserDeepLinkContract.CurrentVersion ->
+                    XdmBrowserDeepLinkParseResult.Rejected(XdmBrowserDeepLinkRejection.UnsafeEnvelope)
                 else -> XdmBrowserDeepLinkParseResult.Rejected(XdmBrowserDeepLinkRejection.UnsafeEnvelope)
             }
         }

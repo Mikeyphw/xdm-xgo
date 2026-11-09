@@ -163,7 +163,15 @@ class BrowserExtensionExportManager(
 
         val temp = File.createTempFile("xdm-firefox-", ".xpi.tmp", appContext.cacheDir)
         try {
-            val generated = generator.generateToFile(config, temp)
+            // Export from the app itself is the user-approved pairing step: the XPI receives
+            // only this app install's public key, never a secret or an AndroidKeyStore handle.
+            val pairing = BrowserCaptureEnvelopeManager()
+            val pairedConfig = config.copy(
+                captureKeyId = pairing.keyId,
+                capturePublicKeySpkiBase64Url = pairing.publicKeySpkiBase64Url,
+                captureOaepHash = pairing.captureOaepHash,
+            )
+            val generated = generator.generateToFile(pairedConfig, temp)
             require(temp.length() == generated.byteCount) { "Temporary XPI byte-count mismatch" }
             val localHash = temp.inputStream().buffered().use(BrowserExtensionHash::digest)
             require(localHash == generated.sha256) { "Temporary XPI checksum mismatch" }

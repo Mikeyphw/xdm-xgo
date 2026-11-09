@@ -19,10 +19,10 @@ class BrowserExtensionSourceContractTest {
     @Test fun `popup contains no custom protocol anchors`() {
         val popup=extensionRoot.resolve("popup.html").readText(); assertFalse(popup.contains("idmdownload:")); assertFalse(popup.contains("xdmdownload:")); assertFalse(popup.contains("intent:"))
     }
-    @Test fun `xdm handoff is direct v3 and independent from android install keys`() {
+    @Test fun `xdm handoff encrypts paired sessions and retains public only add`() {
         val handoff=extensionRoot.resolve("handoff.js").readText(); val config=extensionRoot.resolve("generated-config.template.js").readText()
         assertTrue(handoff.contains("function buildXdmCapture")); assertTrue(handoff.contains("params.set(\"url\", url)")); assertTrue(handoff.contains("proposedHeaders")); assertTrue(handoff.contains("finalHeaders"))
-        assertFalse(config.contains("captureKeyId")); assertFalse(config.contains("capturePublicKeySpki")); assertFalse(config.contains("captureOaepHash"))
+        assertTrue(config.contains("@@CAPTURE_PAIRING_CONFIG@@")); assertTrue(handoff.contains("RSA-OAEP")); assertTrue(handoff.contains("AES-GCM"))
     }
     @Test fun `page hints require evidence and misleading non-media mime is rejected`() {
         val observer=extensionRoot.resolve("network-observer.js").readText(); val detector=extensionRoot.resolve("detector-core.js").readText(); val sniffer=extensionRoot.resolve("page-sniffer.js").readText()

@@ -64,6 +64,7 @@ class BrowserCaptureImportJournal internal constructor(
             "Only encrypted browser capture sessions may enter the import journal"
         }
         val sessionId = requireNotNull(payload.captureSessionId).requireSafeToken()
+        check(fileIo.read(completedMarker(sessionId)) == null) { "Browser capture was already imported" }
         val target = fileFor(sessionId)
         val existingBytes = fileIo.read(target)
         if (existingBytes != null) {
@@ -105,7 +106,20 @@ class BrowserCaptureImportJournal internal constructor(
 
     @Synchronized
     fun complete(sessionId: String) {
-        safeTokenOrNull(sessionId)?.let(::fileFor)?.let(fileIo::delete)
+        val safe = safeTokenOrNull(sessionId) ?: return
+        val pending = fileFor(safe)
+        if (fileIo.read(pending) == null) return
+        // Persist a non-secret one-use tombstone BEFORE deleting recoverable ciphertext.
+        // Repeated external launches cannot replay a completed capture after process death.
+        fileIo.write(completedMarker(safe), byteArrayOf(1))
+        fileIo.delete(pending)
+    }
+
+    private fun completedMarker(sessionId: String): File {
+        val digest = java.security.MessageDigest.getInstance("SHA-256")
+            .digest(sessionId.toByteArray(Charsets.UTF_8))
+            .joinToString("") { byte -> "%02x".format(byte) }
+        return File(root, ".consumed-$digest")
     }
 
     private fun read(bytes: ByteArray): Entry? = runCatching {

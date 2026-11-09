@@ -110,11 +110,29 @@
     };
   }
 
+  // Public-only fallback: never put signed query strings or credential-bearing
+  // media references in browser navigation. Encrypted capture handles those.
+  function publicUrl(raw) {
+    const value = safeHttpUrl(raw);
+    if (!value || !/^https?:/i.test(value)) return "";
+    const uri = new URL(value);
+    if (uri.search || uri.hash || uri.username || uri.password) return "";
+    if (/\b(?:token|sig|signature|auth|jwt|secret|session|key|credential)\b/i.test(uri.pathname)) return "";
+    return value;
+  }
+
+  function hasCredentialHeader(input = {}) {
+    const handoff = input.browserHandoff && typeof input.browserHandoff === "object" ? input.browserHandoff : {};
+    return [input.headers, handoff.proposedHeaders && handoff.proposedHeaders.headers,
+      handoff.finalHeaders && handoff.finalHeaders.headers].some(bag =>
+      Object.keys(sanitizeHeaderBag(bag || {})).some(name => name === "authorization" || name === "cookie"));
+  }
+
   function buildXdmAdd(input = {}) {
-    const url = safeHttpUrl(input.url); const scheme = validScheme(input.scheme);
+    const url = publicUrl(input.url); const scheme = validScheme(input.scheme);
     if (!url || !scheme) return "";
     const params = new URLSearchParams(); params.set("v", "1"); params.set("url", url);
-    const pageUrl = safeHttpUrl(input.pageUrl || ""); if (pageUrl) params.set("page", pageUrl);
+    const pageUrl = publicUrl(input.pageUrl || ""); if (pageUrl) params.set("page", pageUrl);
     const title = cleanText(input.title, 240); if (title) params.set("title", title);
     const filename = cleanFilename(input.title, url, input.mimeType); if (filename) params.set("filename", filename);
     const mime = String(input.mimeType || "").split(";", 1)[0].trim().toLowerCase().slice(0, 120); if (mime) params.set("mime", mime);
@@ -122,36 +140,13 @@
   }
 
   function buildXdmCapture(input = {}) {
-    const url = safeHttpUrl(input.url); const scheme = validScheme(input.scheme);
-    if (!url || !scheme) return "";
-    const params = new URLSearchParams();
-    params.set("v", String(CONFIG.contractVersion || 3));
-    params.set("url", url);
-    const pageUrl = safeHttpUrl(input.pageUrl || input.tabUrl || ""); if (pageUrl) params.set("page", pageUrl);
-    const frameUrl = safeHttpUrl(input.frameUrl || ""); if (frameUrl) params.set("frame", frameUrl);
-    const thumbnail = safeHttpUrl(input.thumbnailUrl || ""); if (thumbnail) params.set("thumbnail", thumbnail);
-    const title = cleanText(input.title, 240); if (title) params.set("title", title);
-    const filename = cleanFilename(input.title, url, input.mimeType || input.contentType); if (filename) params.set("filename", filename);
-    const mime = String(input.mimeType || input.contentType || "").split(";", 1)[0].trim().toLowerCase().slice(0, 120); if (mime) params.set("mime", mime);
-    params.set("kind", cleanText(input.streamKind || mediaKind(url, mime), 32).toLowerCase() || "media");
-    const stableMediaId = String(input.stableMediaId || "").trim().replace(/[^A-Za-z0-9._:-]/g, "").slice(0, 160); if (stableMediaId.length >= 8) params.set("stableMediaId", stableMediaId);
-    const proof = senderProof(input);
-    params.set("pageObservationNonce", proof.nonce);
-    params.set("pageObservationCreatedAt", String(proof.createdAt));
-    params.set("pageObservationExpiresAt", String(proof.expiresAt));
-    const requestFingerprint = String(input.requestFingerprint || "").trim().replace(/[^A-Za-z0-9._:-]/g, "").slice(0, 256); if (requestFingerprint) params.set("requestFingerprint", requestFingerprint);
-    const revision = Math.max(0, Number(input.sessionRevision || input.revision || proof.createdAt)); if (revision) params.set("sessionRevision", String(Math.trunc(revision)));
-    const length = Math.max(0, Number(input.contentLength || 0)); if (length) params.set("length", String(Math.trunc(length)));
-    const duration = Math.max(0, Number(input.durationMs || 0)); if (duration) params.set("durationMs", String(Math.trunc(duration)));
-    const blocks = candidateHeaderBags(input);
-    if (blocks.rawHeaders) params.set("headers", blocks.rawHeaders);
-    if (blocks.proposedHeaders) params.set("proposedHeaders", blocks.proposedHeaders);
-    if (blocks.finalHeaders) params.set("finalHeaders", blocks.finalHeaders);
-    const link = `${scheme}://capture?${params.toString()}`;
-    return link.length <= 64 * 1024 ? link : "";
+    // Unpaired browsers may send only a non-secret URL to the normal Add review.
+    // Authenticated/signed media MUST use buildCaptureSession() with XPI pairing.
+    if (hasCredentialHeader(input)) return "";
+    return buildXdmAdd(input);
   }
 
-  function compactSessionCandidate(candidate = {}, fallbackPageUrl = "", fallbackTitle = "", revision = 0) {
+    function compactSessionCandidate(candidate = {}, fallbackPageUrl = "", fallbackTitle = "", revision = 0) {
     const url = safeHttpUrl(candidate.url);
     if (!url) return null;
     const handoff = candidate.browserHandoff && typeof candidate.browserHandoff === "object" ? candidate.browserHandoff : {};
@@ -209,7 +204,14 @@
         default: Boolean(item && item.default),
       })).filter(item => item.url),
       proposedHeaders: sanitizeHeaderBag(proposed || {}),
-      finalHeaders: sanitizeHeaderBag(finalSent || {}),
+      // Only onSendHeaders evidence tied to this exact request may authorize replay.
+      finalHeaders: (
+        handoff.requestId && String(handoff.requestId) === String(candidate.requestId || "") &&
+        Number(handoff.requestGeneration || 0) > 0 &&
+        Number(handoff.requestGeneration) === Number(candidate.requestGeneration || 0) &&
+        handoff.finalHeaders && handoff.finalHeaders.kind === "FinalSent" &&
+        Math.abs(Date.now() - Number(handoff.requestGeneration)) <= 45 * 1000
+      ) ? sanitizeHeaderBag(finalSent || {}) : {},
     };
     for (const key of ["pageUrl", "frameUrl", "title", "contentType", "thumbnailUrl", "stableMediaId", "requestId", "requestFingerprint", "canonicalUrl", "logicalMediaId"]) {
       if (!result[key]) delete result[key];
@@ -224,50 +226,86 @@
     return result;
   }
 
+  function base64Url(bytes) {
+    let binary = "";
+    for (let offset = 0; offset < bytes.length; offset += 8192) {
+      binary += String.fromCharCode(...bytes.subarray(offset, offset + 8192));
+    }
+    return btoa(binary).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/g, "");
+  }
+
+  function unbase64Url(raw) {
+    const text = String(raw || "").replace(/-/g, "+").replace(/_/g, "/");
+    const binary = atob(text + "=".repeat((4 - text.length % 4) % 4));
+    return Uint8Array.from(binary, char => char.charCodeAt(0));
+  }
+
+  function pairedCaptureConfig() {
+    const kid = String(CONFIG.captureKeyId || "");
+    const spki = String(CONFIG.capturePublicKeySpkiBase64Url || "");
+    return /^[a-f0-9]{24}$/.test(kid) && /^[A-Za-z0-9_-]{350,1500}$/.test(spki) &&
+      CONFIG.captureOaepHash === "SHA-1" ? { kid, spki } : null;
+  }
+
   async function buildCaptureSession(input = {}) {
     const requested = (Array.isArray(input.candidates) ? input.candidates : [])
       .map(candidate => compactSessionCandidate(candidate, input.pageUrl, input.title, input.revision))
-      .filter(Boolean)
-      .slice(0, 24);
+      .filter(Boolean).slice(0, 24);
     const primary = requested[0] || compactSessionCandidate(input, input.pageUrl, input.title, input.revision);
     if (!primary) return "";
-    const primarySource = (Array.isArray(input.candidates) ? input.candidates : []).find(item => item && safeHttpUrl(item.url)) || input;
-    const base = buildXdmCapture(Object.assign({}, primarySource, {
-      scheme: input.scheme,
-      pageUrl: input.pageUrl || primary.pageUrl,
-      title: input.title || primary.title,
-      sessionRevision: input.revision || primary.sessionRevision,
-      streamKind: primary.streamKind || mediaKind(primary.url, primary.contentType),
-    }));
-    if (!base || requested.length === 0) return base;
-
-    const sessionId = String(input.sessionId || "").trim().replace(/[^A-Za-z0-9._:-]/g, "").slice(0, 96);
-    const revision = Math.max(1, Math.trunc(Number(input.revision || primary.sessionRevision || 1)));
-    if (!sessionId) return base;
-    const total = Math.max(requested.length, Math.trunc(Number(input.totalCandidateCount || requested.length)));
-
-    // URL-encoding can expand JSON substantially. Keep the strongest prefix that fits the
-    // 64 KiB Android deep-link contract, and declare truncation rather than lying about count.
-    for (let count = requested.length; count >= 1; count -= 1) {
-      const batch = requested.slice(0, count);
-      const json = JSON.stringify(batch);
-      if (json.length > 52 * 1024) continue;
-      const uri = new URL(base);
-      uri.searchParams.set("sid", sessionId);
-      uri.searchParams.set("sessionRevision", String(revision));
-      uri.searchParams.set("candidateCount", String(total));
-      uri.searchParams.set("capturedCandidateCount", String(count));
-      uri.searchParams.set("truncated", input.truncated || total > count ? "1" : "0");
-      uri.searchParams.set("candidates", json);
-      const link = uri.toString();
-      if (link.length <= 64 * 1024) return link;
+    const primarySource = (Array.isArray(input.candidates) ? input.candidates : [])
+      .find(item => item && safeHttpUrl(item.url)) || input;
+    const scheme = validScheme(input.scheme);
+    if (!scheme) return "";
+    const pairing = pairedCaptureConfig();
+    if (!pairing) {
+      // An unpaired/keyless XPI can only use the normal public URL Add review.
+      // Never silently downgrade a credential-bearing media capture to plaintext.
+      return buildXdmCapture(Object.assign({}, primarySource, { scheme,
+        pageUrl: input.pageUrl || primary.pageUrl, title: input.title || primary.title }));
     }
-    // XAR10: oversized capture sessions must fail closed instead of silently falling back
-    // to one direct candidate and dropping multi-candidate/variant/track evidence.
+    if (!globalThis.crypto || !globalThis.crypto.subtle || !globalThis.crypto.getRandomValues) {
+      throw new Error("Encrypted media handoff requires WebCrypto. Reopen the paired XPI.");
+    }
+    const subtle = globalThis.crypto.subtle;
+    const sessionId = String(input.sessionId || ("browser-" + randomNonce()))
+      .replace(/[^A-Za-z0-9._:-]/g, "").slice(0, 96);
+    const revision = Math.max(1, Math.trunc(Number(input.revision || primary.sessionRevision || Date.now())));
+    const createdAt = Date.now(), expiresAt = createdAt + HANDOFF_LIFETIME_MS;
+    const spkiKey = await subtle.importKey("spki", unbase64Url(pairing.spki),
+      { name: "RSA-OAEP", hash: "SHA-1" }, false, ["encrypt"]);
+    const contentKey = globalThis.crypto.getRandomValues(new Uint8Array(32));
+    const aesKey = await subtle.importKey("raw", contentKey, { name: "AES-GCM" }, false, ["encrypt"]);
+    const wrappedKey = new Uint8Array(await subtle.encrypt({ name: "RSA-OAEP" }, spkiKey, contentKey));
+    const aad = new TextEncoder().encode(`xdm-capture-v2|${sessionId}|${pairing.kid}`);
+    const total = Math.max(requested.length, Math.trunc(Number(input.totalCandidateCount || requested.length)));
+    const sourceCandidates = requested.length ? requested : [primary];
+    for (let count = sourceCandidates.length; count >= 1; count -= 1) {
+      const message = {
+        v: 1, sid: sessionId, revision, createdAt, expiresAt,
+        pageUrl: safeHttpUrl(input.pageUrl || primary.pageUrl),
+        title: cleanText(input.title || primary.title, 240),
+        totalCandidateCount: Math.max(total, sourceCandidates.length),
+        truncated: Boolean(input.truncated || count < sourceCandidates.length || total > count),
+        candidates: sourceCandidates.slice(0, count),
+      };
+      const clear = new TextEncoder().encode(JSON.stringify(message));
+      if (clear.length > 56 * 1024) continue;
+      // Generate a NEW GCM nonce for every truncation attempt, never reuse IV/key.
+      const iv = globalThis.crypto.getRandomValues(new Uint8Array(12));
+      const ct = new Uint8Array(await subtle.encrypt({ name: "AES-GCM", iv,
+        additionalData: aad, tagLength: 128 }, aesKey, clear));
+      if (ct.length > 60 * 1024) continue;
+      const uri = `${scheme}://capture?v=2&sid=${encodeURIComponent(sessionId)}` +
+        `&kid=${encodeURIComponent(pairing.kid)}&ek=${base64Url(wrappedKey)}` +
+        `&iv=${base64Url(iv)}&ct=${base64Url(ct)}`;
+      if (new TextEncoder().encode(uri).length <= 64 * 1024) return uri;
+    }
+    // Never downgrade or drop all candidates when encrypted payload is oversized.
     return "";
   }
 
-  // Compatibility symbol for old tests/callers in the same source tree. New XPIs do not encrypt.
+    // Compatibility symbol retained for existing clients. New app-exported XPIs encrypt.
   async function buildEncryptedCaptureSession(input = {}) { return buildCaptureSession(input); }
 
   function encodeIntentString(value) {

@@ -1,13 +1,29 @@
 "use strict";
-const assert=require("assert"),fs=require("fs"),path=require("path"),vm=require("vm"),os=require("os"),childProcess=require("child_process");
-const source=path.resolve(__dirname,"../src/main/extension/xdm-firefox"); const context=vm.createContext({console,URL,URLSearchParams,encodeURI,Date,setTimeout,clearTimeout,document:{baseURI:"https://page.example/watch",title:"Release"},location:{href:"https://page.example/watch"},globalThis:null}); context.globalThis=context; context.XdmExtensionConfig={contractVersion:3,xdmScheme:"xdmdownload",defaultTarget:"xdm"}; for(const file of ["detector-core.js","candidate-store.js","handoff.js"]) vm.runInContext(fs.readFileSync(path.join(source,file),"utf8"),context,{filename:file});
-const core=context.XdmDetectorCoreV1,handoff=context.XdmHandoffV1; const configSource=fs.readFileSync(path.join(source,"generated-config.template.js"),"utf8"); const gradleSource=fs.readFileSync(path.resolve(__dirname,"../build.gradle.kts"),"utf8"); const prepareSource=fs.readFileSync(path.resolve(__dirname,"../tools/prepare_extension.py"),"utf8");
-for(const token of ["captureKeyId","capturePublicKeySpki","captureOaepHash"]){ assert(!configSource.includes(token)); assert(!gradleSource.includes(token)); assert(!prepareSource.includes(token)); }
-const temp=fs.mkdtempSync(path.join(os.tmpdir(),"xdm-v3-release-")); try { const result=childProcess.spawnSync("python3",[path.resolve(__dirname,"../tools/prepare_extension.py"),"--source",source,"--output",temp,"--channel","release","--default-target","xdm","--contract-version","3","--extension-version","1.6.1"],{encoding:"utf8"}); assert.strictEqual(result.status,0,result.stderr||result.stdout); } finally { fs.rmSync(temp,{recursive:true,force:true}); }
-for(const fixture of [{url:"https://cdn.example/video",type:"media",contentType:"video/mp4"},{url:"https://cdn.example/master",type:"fetch",contentType:"application/vnd.apple.mpegurl"},{url:"https://cdn.example/manifest",type:"xmlhttprequest",contentType:"application/dash+xml"}]) assert(core.classifyResponse(fixture).accept);
-assert(!core.classifyResponse({url:"https://api.example/fake.mp4",type:"fetch",contentType:"application/json"}).accept,"JSON endpoint with media-looking suffix must be rejected"); assert(!core.classifyResponse({url:"https://cdn.example/poster.mp4",type:"other",contentType:"image/jpeg"}).accept);
-const capture=handoff.buildXdmCapture({url:"https://cdn.example/master.m3u8?signature=signed-a",mimeType:"application/vnd.apple.mpegurl"}); assert.match(capture,/^xdmdownload:\/\/capture\?v=3&/); assert(!/kid=|ek=|iv=|ct=/.test(capture)); const captureUrl=new URL(capture); assert(captureUrl.searchParams.get("pageObservationNonce")); assert(captureUrl.searchParams.get("pageObservationCreatedAt")); assert(captureUrl.searchParams.get("pageObservationExpiresAt"));
-const noThumbnail=new URL(handoff.buildXdmCapture({url:"https://cdn.example/video.mp4",pageUrl:"https://page.example/watch"})); assert(!noThumbnail.searchParams.has("thumbnail"),"missing thumbnail must not resolve to the page URL");
-const metadataCapture=new URL(handoff.buildXdmCapture({url:"https://cdn.example/video.mp4",contentLength:734003200,durationMs:630000,thumbnailUrl:"https://cdn.example/poster.jpg"})); assert.strictEqual(metadataCapture.searchParams.get("length"),"734003200"); assert.strictEqual(metadataCapture.searchParams.get("durationMs"),"630000"); assert.strictEqual(metadataCapture.searchParams.get("thumbnail"),"https://cdn.example/poster.jpg"); console.log("browser bridge v3 release-gate tests passed");
-
-(async()=>{ const session=new URL(await handoff.buildCaptureSession({sessionId:"release-session",revision:77,pageUrl:"https://page.example/watch",totalCandidateCount:2,candidates:[{url:"https://cdn.example/master.m3u8",contentType:"application/vnd.apple.mpegurl",requestFingerprint:"release-request-one"},{url:"https://cdn.example/video.mp4",contentType:"video/mp4",requestFingerprint:"release-request-two"}]})); assert.strictEqual(session.searchParams.get("capturedCandidateCount"),"2"); assert.strictEqual(JSON.parse(session.searchParams.get("candidates")).length,2); assert(!/kid=|ek=|iv=|ct=/.test(session.toString())); console.log("bounded sender-bound capture-session release gate passed"); })().catch(error=>{ console.error(error); process.exitCode=1; });
+const assert=require("node:assert/strict"),fs=require("node:fs"),path=require("node:path"),vm=require("node:vm"),os=require("node:os"),cp=require("node:child_process");
+const source=path.resolve(__dirname,"../src/main/extension/xdm-firefox");
+const ctx=vm.createContext({URL,URLSearchParams,console,encodeURI,globalThis:null,
+  document:{baseURI:"https://site.example/watch",title:"Video"},location:{href:"https://site.example/watch"}});
+ctx.globalThis=ctx;ctx.XdmExtensionConfig={contractVersion:3,xdmScheme:"xdmdownload"};
+vm.runInContext(fs.readFileSync(path.join(source,"handoff.js"),"utf8"),ctx);
+const h=ctx.XdmHandoffV1;
+assert.equal(h.buildXdmCapture({url:"https://cdn.example/stream.m3u8?signature=signed-a"}),"");
+assert.equal(h.buildXdmCapture({url:"https://cdn.example/video.mp4",browserHandoff:{finalHeaders:{headers:{Authorization:"Bearer forbidden"}}}}),"");
+const safe=h.buildXdmCapture({url:"https://cdn.example/video.mp4",pageUrl:"https://site.example/watch"});
+assert(safe.startsWith("xdmdownload://add?v=1&"));
+assert(!safe.includes("headers="));
+assert(fs.readFileSync(path.join(source,"generated-config.template.js"),"utf8").includes("@@CAPTURE_PAIRING_CONFIG@@"));
+const output=fs.mkdtempSync(path.join(os.tmpdir(),"xdm-mp01-keyless-"));
+try {
+  const render=cp.spawnSync("python3",[path.resolve(__dirname,"../tools/prepare_extension.py"),
+    "--source",source,"--output",output,"--contract-version","3","--extension-version","1.6.1"],{encoding:"utf8"});
+  assert.equal(render.status,0,render.stderr||render.stdout);
+  const generated=fs.readFileSync(path.join(output,"generated-config.js"),"utf8");
+  assert(!generated.includes("@@")); assert(!generated.includes("captureKeyId"));
+} finally { fs.rmSync(output,{recursive:true,force:true}); }
+(async()=>{
+  const unsigned=await h.buildCaptureSession({sessionId:"unpaired",candidates:[{url:"https://cdn.example/master.m3u8?signature=secret"}]});
+  assert.equal(unsigned,"");
+  const safeSession=await h.buildCaptureSession({sessionId:"unpaired",candidates:[{url:"https://cdn.example/video.mp4"}]});
+  assert(safeSession.startsWith("xdmdownload://add?"));
+  console.log("MP01 release gate: no keyless credential leaks and paired template renders");
+})().catch(e=>{console.error(e);process.exitCode=1});

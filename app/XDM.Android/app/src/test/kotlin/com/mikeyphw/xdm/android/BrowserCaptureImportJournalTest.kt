@@ -43,6 +43,40 @@ class BrowserCaptureImportJournalTest {
     }
 
     @Test
+    fun completedCaptureCannotReplayAfterProcessRestart() {
+        val root = Files.createTempDirectory("xdm-browser-import-replay").toFile()
+        try {
+            val payload = encryptedPayload()
+            val journal = BrowserCaptureImportJournal(root, JvmAtomicJournalFileIo())
+            journal.begin(payload)
+            journal.complete(requireNotNull(payload.captureSessionId))
+            assertTrue(root.listFiles().orEmpty().any { it.name.startsWith(".consumed-") })
+            assertTrue(journal.pending().isEmpty())
+            val recreated = BrowserCaptureImportJournal(root, JvmAtomicJournalFileIo())
+            assertTrue(runCatching { recreated.begin(payload) }.isFailure)
+            assertTrue(recreated.pending().isEmpty())
+        } finally { root.deleteRecursively() }
+    }
+
+    @Test
+    fun failedTombstoneWriteDoesNotDeleteRecoverableEncryptedImport() {
+        val root = Files.createTempDirectory("xdm-browser-import-tombstone-failure").toFile()
+        try {
+            val io = JvmAtomicJournalFileIo()
+            val journal = BrowserCaptureImportJournal(root, io)
+            val payload = encryptedPayload()
+            journal.begin(payload)
+            io.failBeforeCommit = true
+            assertTrue(runCatching { journal.complete(requireNotNull(payload.captureSessionId)) }.isFailure)
+            assertEquals(payload, journal.pending().single().payload)
+            io.failBeforeCommit = false
+            journal.complete(requireNotNull(payload.captureSessionId))
+            assertTrue(journal.pending().isEmpty())
+            assertTrue(runCatching { journal.begin(payload) }.isFailure)
+        } finally { root.deleteRecursively() }
+    }
+
+    @Test
     fun invalidOrConflictingSessionCannotReplaceExistingEncryptedJournal() {
         val root = Files.createTempDirectory("xdm-browser-import-conflict").toFile()
         try {

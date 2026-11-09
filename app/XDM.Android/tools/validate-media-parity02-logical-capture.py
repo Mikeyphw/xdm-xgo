@@ -104,7 +104,7 @@ for s in ('1000','X-Amz-Credential','segment','Aes128','ProtectedUnsupported'):
  req(s in test,f'logical graph golden/stress tests missing {s}')
 node_detector=read('browser-extension/tests/test_detector.js'); node_handoff=read('browser-extension/tests/test_handoff.js')
 req('logicalSigned' in node_detector and 'variantInfo.length' in node_detector,'Firefox HLS/canonical regression test missing')
-req('logical-master-12345678' in node_handoff and 'trackInfo[0].language' in node_handoff,'Firefox logical handoff metadata regression missing')
+req('MP01 public-only URL fallback' in node_handoff and 'buildXdmCapture' in node_handoff,'Firefox secure handoff and public-only fallback regression missing')
 contract=read('app/src/test/kotlin/com/mikeyphw/xdm/android/MediaParity02LogicalMediaCaptureContractTest.kt')
 req('webViewAndFirefoxConvergeOnLogicalMediaInsteadOfRawParts' in contract,'Parity02 app integration contract missing')
 

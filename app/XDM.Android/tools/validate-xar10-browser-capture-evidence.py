@@ -60,7 +60,7 @@ def source_contracts() -> None:
         "rawHeaders: finalHeaders",
         "requestId:",
         "requestGeneration:",
-        "oversized capture sessions must fail closed",
+        "Never downgrade or drop all candidates",
     )
     require(
         "browser-extension/src/main/extension/xdm-firefox/network-observer.js",
@@ -72,7 +72,7 @@ def source_contracts() -> None:
         "This site is disabled by XDM site-mode settings.",
         "auto-offer suppression is committed only after handoff construction",
         "function requireSingleSelectedCandidate",
-        "const candidate = Object.assign({}, selected, { streamKind: candidateStreamKind(selected) });",
+        "const authoritative = proof && proof.requestFingerprint === selected.requestFingerprint",
         "candidates: [candidate]",
         "totalCandidateCount: 1",
         "truncated: false",
