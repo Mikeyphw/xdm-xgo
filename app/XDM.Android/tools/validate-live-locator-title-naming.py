@@ -85,8 +85,22 @@ need('assertEquals("session-token.mp3", record.fileName)' in media_test,
      "no-page-title MIME fallback regression test missing")
 need('thumbnailUrl, "https://img.example/video-poster.jpg"' in background_test or 'thumbnailUrl, "https://img.example/video-poster.jpg"' in background_test.replace('metadataHandoff.candidates[0].', ''),
      "background extension test must prove playback artwork survives merge")
-need('batch[1].durationMs,630000' in handoff_test and 'batch[1].thumbnailUrl,"https://img.example/poster.jpg"' in handoff_test,
-     "handoff regression test must prove compact candidate metadata survives")
+# MP01: public-only v1 Add no longer serializes private media metadata.
+# Prove the thumbnail and duration survive INSIDE the decrypted authenticated
+# app-paired v2 envelope, rather than asserting obsolete plaintext-v3 behavior.
+secure_handoff_test = read("browser-extension/tests/test_secure_handoff.js")
+need(
+    all(token in secure_handoff_test for token in (
+        'durationMs:630000',
+        'thumbnailUrl:"https://img.example/poster.jpg"',
+        'assert.equal(json.candidates[0].durationMs,630000)',
+        'assert.equal(json.candidates[0].thumbnailUrl,"https://img.example/poster.jpg")',
+        'assert(!session.includes("poster.jpg"))',
+        'webcrypto.subtle.decrypt',
+        'assert.equal(json.candidates[0].finalHeaders.authorization,"Bearer private")',
+    )),
+    "encrypted handoff regression must prove authenticated compact duration/artwork survives without navigation disclosure",
+)
 need("pageTitleIsCanonicalDefaultForCapturedMediaIncludingExtensionImports" in contract,
      "cross-stack NAME01 contract test missing")
 need("All browser-extension Node test files pass" in report and "Full Android Gradle/lint validation is intentionally deferred" in report,

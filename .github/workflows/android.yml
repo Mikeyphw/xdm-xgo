@@ -24,6 +24,7 @@ on:
       - 'scripts/xgo_x86_64_profile.py'
       - 'scripts/verify_xgo_x86_apk.py'
       - 'scripts/run_xgo_x86_64_emulator.sh'
+      - 'scripts/test_xgo_mp01_hf04_ci_tiers.py'
   pull_request:
     paths:
       - 'app/XDM.Android/**'
@@ -45,6 +46,8 @@ on:
       - 'scripts/xgo_x86_64_profile.py'
       - 'scripts/verify_xgo_x86_apk.py'
       - 'scripts/run_xgo_x86_64_emulator.sh'
+      - 'scripts/test_xgo_mp01_hf04_ci_tiers.py'
+    types: [opened, reopened, synchronize, labeled, unlabeled, ready_for_review]
   workflow_dispatch:
     inputs:
       arm64_translation_diagnostic:
@@ -70,7 +73,47 @@ env:
   XDM_ANDROID_NDK_VERSION: '29.0.14206865'
 
 jobs:
+  hotfix-fast:
+    # Every hotfix receives a full static validation sweep and JS crypto regressions
+    # before any Android SDK, NDK, Gradle or emulator is provisioned.
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        working-directory: app/XDM.Android
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Static release contracts (no SDK, NDK or Gradle)
+        shell: bash
+        run: |
+          set -euo pipefail
+          export PYTHONDONTWRITEBYTECODE=1
+          python3 tools/validate-xar01-build-provenance.py
+          python3 tools/validate-bug-hunt-phase10-release-upgrade-packaging.py
+          python3 tools/verify-phase10-backup-policy.py
+          python3 tools/validate-uix-r6-accessibility-performance-release-seal.py
+          python3 tools/validate-bug-hunt-phase11-validation-matrix.py
+          python3 tools/validate-xar17-313-root-closure.py
+          bash tools/run-bug-hunt-phase11-validation-matrix.sh --static-only --ci
+          python3 tools/validate-xar16-release-evidence-seal.py
+          bash tools/run-final-release-gate.sh --ci
+      - name: Firefox JS and encrypted capture tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          for suite in test_detector.js test_handoff.js test_secure_handoff.js test_fab.js test_phase43a_bridge.js test_background.js test_release_gate.js; do
+            node "browser-extension/tests/$suite"
+          done
+      - name: Hotfix/full CI gating contract
+        working-directory: .
+        run: python3 -B scripts/test_xgo_mp01_hf04_ci_tiers.py
+
   validate:
+    needs: hotfix-fast
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'xdm-full-ci')
     runs-on: ubuntu-latest
     timeout-minutes: 120
     defaults:
@@ -437,6 +480,29 @@ jobs:
             ${{ runner.temp }}/xdm-emulator-persistence/receipt.json
           retention-days: 7
           if-no-files-found: warn
+
+  android-pr-merge-qualification:
+    # Fast-only PRs remain visibly unqualified. Only the current PR head may
+    # pass once BOTH full Gradle build and API36 emulator compatibility succeed.
+    if: always() && github.event_name == 'pull_request'
+    needs: [hotfix-fast, validate, emulator-compatibility]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require final Android qualification at current PR head
+        shell: bash
+        env:
+          FAST_RESULT: ${{ needs.hotfix-fast.result }}
+          FULL_RESULT: ${{ needs.validate.result }}
+          EMULATOR_RESULT: ${{ needs.emulator-compatibility.result }}
+        run: |
+          set -euo pipefail
+          if [[ "$FAST_RESULT" != success || "$FULL_RESULT" != success || "$EMULATOR_RESULT" != success ]]; then
+            echo '::error::XGO_ANDROID_PR_NOT_QUALIFIED: fast-only CI is NOT merge approval. Add label xdm-full-ci to run the full Android + emulator gate on this PR SHA.'
+            printf 'fast=%s full=%s emulator=%s\n' "$FAST_RESULT" "$FULL_RESULT" "$EMULATOR_RESULT"
+            exit 1
+          fi
+          echo 'XGO_ANDROID_PR_FULLY_QUALIFIED: static, JS, Gradle, APK and API36 emulator passed for this PR head'
 
   x86_64-app-runtime:
     # Manual opt-in only. Normal push/PR/release jobs never build an x86_64 app.

@@ -4,13 +4,29 @@ on:
   push:
     branches: [master, main, modern]
   pull_request:
+    types: [opened, reopened, synchronize, labeled, unlabeled, ready_for_review]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  modern-fast:
+    # Cheap source-integrity and release-contract audits on every PR hotfix.
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Firefox single-extension source integrity
+        run: python3 app/XDM/eng/validate-xfe01-single-firefox-extension.py
+      - name: Desktop REM18 release matrix source audit
+        run: python3 app/XDM/eng/rem18-release-matrix-audit.py
+      - name: Hotfix/full CI gating contract
+        run: python3 -B scripts/test_xgo_mp01_hf04_ci_tiers.py
+
   validate:
+    needs: modern-fast
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'xdm-full-ci')
     strategy:
       fail-fast: false
       matrix:
@@ -60,7 +76,32 @@ jobs:
             artifacts/smoke
           if-no-files-found: ignore
 
+  modern-pr-merge-qualification:
+    # Fast-only does not qualify a desktop release. The final PR head needs
+    # BOTH OS matrix lanes plus native Linux/Windows ARM64 toolchains.
+    if: always() && github.event_name == 'pull_request'
+    needs: [modern-fast, validate, native-linux-arm64, native-windows-arm64]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require native cross-platform qualification for this PR
+        shell: bash
+        env:
+          FAST_RESULT: ${{ needs.modern-fast.result }}
+          MATRIX_RESULT: ${{ needs.validate.result }}
+          LINUX_ARM64_RESULT: ${{ needs.native-linux-arm64.result }}
+          WINDOWS_ARM64_RESULT: ${{ needs.native-windows-arm64.result }}
+        run: |
+          set -euo pipefail
+          if [[ "$FAST_RESULT" != success || "$MATRIX_RESULT" != success || "$LINUX_ARM64_RESULT" != success || "$WINDOWS_ARM64_RESULT" != success ]]; then
+            echo '::error::XGO_MODERN_PR_NOT_QUALIFIED: fast-only checks are not release approval. Add label xdm-full-ci for full modern matrix and native ARM64 qualification.'
+            exit 1
+          fi
+          echo 'XGO_MODERN_PR_FULLY_QUALIFIED: desktop matrix and native Linux/Windows ARM64 passed for current PR head'
+
   native-linux-arm64:
+    needs: modern-fast
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'xdm-full-ci')
     # Build Go c-shared and run the published .NET app on its real CPU ABI.
     # Never silently substitute an AMD64-only structural publish for ARM64.
     runs-on: ubuntu-24.04-arm
@@ -92,6 +133,8 @@ jobs:
           if-no-files-found: ignore
 
   native-windows-arm64:
+    needs: modern-fast
+    if: github.event_name != 'pull_request' || contains(github.event.pull_request.labels.*.name, 'xdm-full-ci')
     # Native ARM64 c-shared builds must not be faked by an x64-only publish.
     runs-on: windows-11-vs2026-arm
     timeout-minutes: 50

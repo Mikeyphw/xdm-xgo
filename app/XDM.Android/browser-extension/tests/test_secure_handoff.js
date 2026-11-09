@@ -16,11 +16,12 @@ const u8=s=>new Uint8Array(Buffer.from(s,"base64url"));
     const sensitive="https://cdn.example/master.m3u8?token=top-secret";
     const head={requestId:"request-77",requestGeneration:Date.now(),finalHeaders:{kind:"FinalSent",headers:{Cookie:"session=private",Authorization:"Bearer private"}}};
     const session=await handoff.buildCaptureSession({sessionId:"browser-secure-test",revision:42,pageUrl:"https://site.example/watch?session=page-secret",title:"Test",candidates:[
-      {url:sensitive,requestId:"request-77",requestGeneration:head.requestGeneration,browserHandoff:head,contentType:"application/vnd.apple.mpegurl",requestFingerprint:"exact-77",stableMediaId:"logical-master-12345678",logicalMediaId:"logical-master-12345678",manifest:true,manifestRole:"master",variantInfo:[{url:"https://cdn.example/720.m3u8",width:1280,height:720,bandwidth:2800000,audioGroup:"audio"}],trackInfo:[{url:"https://cdn.example/en.vtt",type:"subtitles",name:"English",language:"en"}]},
+      {url:sensitive,requestId:"request-77",requestGeneration:head.requestGeneration,browserHandoff:head,contentType:"application/vnd.apple.mpegurl",durationMs:630000,thumbnailUrl:"https://img.example/poster.jpg",requestFingerprint:"exact-77",stableMediaId:"logical-master-12345678",logicalMediaId:"logical-master-12345678",manifest:true,manifestRole:"master",variantInfo:[{url:"https://cdn.example/720.m3u8",width:1280,height:720,bandwidth:2800000,audioGroup:"audio"}],trackInfo:[{url:"https://cdn.example/en.vtt",type:"subtitles",name:"English",language:"en"}]},
       {url:"https://cdn.example/other.mp4?signature=second-secret",requestId:"request-88",requestGeneration:head.requestGeneration,browserHandoff:{...head,requestId:"wrong-request"},contentType:"video/mp4"}
     ]});
     assert(session.startsWith("xdmdownload://capture?v=2&"));
     assert(!/private|top-secret|page-secret|second-secret|authorization|cookie|headers|signature/i.test(decodeURIComponent(session)));
+    assert(!session.includes("poster.jpg"));
     const uri=new URL(session); assert.equal(uri.searchParams.get("kid"),kid);
     const raw=await webcrypto.subtle.decrypt({name:"RSA-OAEP"},kp.privateKey,u8(uri.searchParams.get("ek")));
     const key=await webcrypto.subtle.importKey("raw",raw,{name:"AES-GCM"},false,["decrypt"]);
@@ -29,6 +30,8 @@ const u8=s=>new Uint8Array(Buffer.from(s,"base64url"));
     const json=JSON.parse(new TextDecoder().decode(plain));
     assert.equal(json.candidates.length,2);
     assert.equal(json.candidates[0].url,sensitive);
+    assert.equal(json.candidates[0].durationMs,630000);
+    assert.equal(json.candidates[0].thumbnailUrl,"https://img.example/poster.jpg");
     assert.equal(json.candidates[0].finalHeaders.authorization,"Bearer private");
     assert.equal(json.candidates[0].logicalMediaId,"logical-master-12345678");
     assert.equal(json.candidates[0].variantInfo[0].height,720);
