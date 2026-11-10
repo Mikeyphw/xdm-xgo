@@ -65,6 +65,9 @@ type HLSRendition struct {
 type HLSMap struct {
 	URI, ResolvedURI string
 	Range            *ByteRange
+	// Key is the encryption context when EXT-X-MAP was declared. The
+	// segment key may change later; this field is transient, never journaled.
+	Key              *HLSKey
 }
 type HLSKey struct {
 	Method                          HLSProtectionKind
@@ -157,6 +160,7 @@ func ParseHLSPlaylist(baseURL, text string) (HLSPlaylist, error) {
 			if err != nil {
 				return HLSPlaylist{}, err
 			}
+			m.Key = cloneHLSKey(currentKey)
 			currentMap = &m
 			continue
 		}
@@ -390,6 +394,7 @@ func cloneHLSMap(m *HLSMap) *HLSMap {
 	}
 	c := *m
 	c.Range = cloneByteRange(m.Range)
+	c.Key = cloneHLSKey(m.Key)
 	return &c
 }
 func cloneHLSKey(k *HLSKey) *HLSKey {

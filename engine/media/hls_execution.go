@@ -254,13 +254,24 @@ func (e *HLSExecutor) executeSegment(ctx context.Context, entry HLSTimelineEntry
 		return out
 	}
     if seg.Map != nil {
-        // A CBC-encrypted EXT-X-MAP requires an explicit IV. The media-sequence
-        // fallback is only defined for media segments, never init maps.
-        if seg.Key != nil && seg.Key.Method == HLSProtectionAES128 && strings.TrimSpace(seg.Key.IV) == "" {
-            out.Status = HLSFragmentUnsupported
-            out.Reason = "encrypted_init_requires_explicit_iv"
-            _, _ = e.ledger.MarkCorrupt(entry.Identity, generation, "encrypted_init_iv_required")
-            return out
+        // RFC 8216: EXT-X-KEY binds to the initialization section at the
+        // EXT-X-MAP declaration, not to the later media segment's key.
+        // An AES-128-encrypted map requires its own explicit IV; never infer
+        // one from the media sequence number.
+        initKey := seg.Map.Key
+        if initKey != nil && initKey.Method != HLSProtectionNone {
+            if initKey.Method != HLSProtectionAES128 {
+                out.Status = HLSFragmentUnsupported
+                out.Reason = "unsupported_init_map_protection"
+                _, _ = e.ledger.MarkCorrupt(entry.Identity, generation, "unsupported_init_map_protection")
+                return out
+            }
+            if strings.TrimSpace(initKey.IV) == "" {
+                out.Status = HLSFragmentUnsupported
+                out.Reason = "encrypted_init_requires_explicit_iv"
+                _, _ = e.ledger.MarkCorrupt(entry.Identity, generation, "encrypted_init_iv_required")
+                return out
+            }
         }
         initBody, err := e.fetcher.FetchHLS(ctx, HLSFetchRequest{URI: seg.Map.ResolvedURI, Kind: HLSFetchInitMap, Range: cloneByteRange(seg.Map.Range), CredentialRef: credentialRef})
         if err == nil && e.store == nil { err = ErrFragmentDurability }
@@ -268,15 +279,15 @@ func (e *HLSExecutor) executeSegment(ctx context.Context, entry HLSTimelineEntry
             initBytes := initBody.Bytes
             identity := FragmentIdentity{Protocol: FragmentProtocolHLS, TimelineKey: "init:" + entry.Identity.TimelineKey,
                 ResourceID: entry.Identity.ResourceID + ":init-map", Range: cloneByteRange(seg.Map.Range)}
-            if seg.Key != nil && seg.Key.Method == HLSProtectionAES128 {
-                key, keyErr := e.fetcher.FetchHLS(ctx, HLSFetchRequest{URI: seg.Key.ResolvedURI, Kind: HLSFetchKey, CredentialRef: credentialRef})
+            if initKey != nil && initKey.Method == HLSProtectionAES128 {
+                key, keyErr := e.fetcher.FetchHLS(ctx, HLSFetchRequest{URI: initKey.ResolvedURI, Kind: HLSFetchKey, CredentialRef: credentialRef})
                 if keyErr != nil { err = ErrHLSKeyFetchFailed } else {
-                    initBytes, err = DecryptHLSAES128(initBytes, key.Bytes, seg.Key.IV, seg.MediaSequence)
+                    initBytes, err = DecryptHLSAES128(initBytes, key.Bytes, initKey.IV, seg.MediaSequence)
                 }
-                // An HLS BYTERANGE here describes ciphertext, not the
-                // PKCS#7-unpadded bytes written into the durable store.
+                // Ciphertext BYTERANGE does not equal PKCS#7-unpadded bytes.
+                // Persist only the opaque key fingerprint, never its signed URL.
                 identity.Range = nil
-                identity.EncryptionID = entry.Identity.EncryptionID
+                identity.EncryptionID = string(initKey.Method) + ":" + digestID("hls-init-key", strings.Join([]string{initKey.ResolvedURI, initKey.IV}, "\x00"))
             }
             if err == nil {
                 initRecord := FragmentRecord{Identity: identity, Role: "init", AttemptGeneration: generation}

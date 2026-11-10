@@ -11,7 +11,7 @@ class MP06SourceContract(unittest.TestCase):
   for a in ('func PlanHLSVOD(req HLSVODRequest)', 'master.Kind!=HLSPlaylistMaster',
             'master.Variants[i].ResolvedURI!=req.VideoURI', 'rendition.GroupID==selected.AudioGroup',
             'mp06MediaPlan("audio",req.AudioURI,req.AudioBody)', 'HLSProtectionAES128',
-            'strings.TrimSpace(seg.Key.IV)', 'result.ExpectedParts++', 'result.ExplicitGaps++'):
+            'strings.TrimSpace(initKey.IV)', 'result.ExpectedParts++', 'result.ExplicitGaps++'):
    self.assertIn(re.sub(r'\s+','',a),compact,a)
   self.assertNotRegex(src,r'\bhttp\s*\.\s*(Get|Post|Client|NewRequest)\s*\(')
   self.assertNotIn('log.',src)
@@ -29,7 +29,7 @@ class MP06SourceContract(unittest.TestCase):
   snippet=src.split('func (e *HLSExecutor) executeSegment(',1)[1].split('\nfunc DecryptHLSAES128(',1)[0]
   for a in ('encrypted_init_requires_explicit_iv','HLSFetchInitMap','HLSFetchKey',
             'DecryptHLSAES128(initBytes, key.Bytes', 'identity.Range = nil',
-            'identity.EncryptionID = entry.Identity.EncryptionID',
+            'digestID("hls-init-key",',
             'e.store.WriteAndCommitFragment(ctx, initRecord, initBytes)', 'e.store.VerifyCommitted(receipt)'):
    self.assertIn(a,snippet,a)
   self.assertNotIn('Role: "key"',snippet)
@@ -57,6 +57,25 @@ class MP06SourceContract(unittest.TestCase):
   extended=read('scripts/test_xgo_mp06_staleness_audit.py')
   self.assertIn('test_original_kotlin_hls_executor_remains_except_exact_mp06_gap_gate',extended)
   self.assertIn('now.replace(new_valid,old_valid,1).replace(new_reason,old_reason,1)',extended)
+ def test_init_map_declaration_key_is_separate_from_segment_key(self):
+  parser=read('engine/media/hls.go')
+  execution=read('engine/media/hls_execution.go')
+  planner=read('engine/media/hls_vod_session.go')
+  fixtures=read('engine/media/hls_map_key_binding_test.go')
+  self.assertIn('Key              *HLSKey',parser)
+  self.assertIn('m.Key = cloneHLSKey(currentKey)',parser)
+  self.assertIn('c.Key = cloneHLSKey(m.Key)',parser)
+  self.assertRegex(execution,r'initKey\s*:=\s*seg\.Map\.Key')
+  self.assertIn('DecryptHLSAES128(initBytes, key.Bytes, initKey.IV',execution)
+  self.assertIn('digestID("hls-init-key",',execution)
+  self.assertIn('initKey := seg.Map.Key',execution)
+  self.assertNotIn('identity.EncryptionID = entry.Identity.EncryptionID',execution)
+  self.assertRegex(planner,r'initKey\s*:=\s*seg\.Map\.Key')
+  self.assertNotIn('seg.Map != nil && seg.Key != nil && seg.Key.Method == HLSProtectionAES128',planner)
+  for id in ('MapBeforeKeyKeepsInitClear','EncryptedInitRequiresExplicitIV',
+             'EncryptedInitDecryptsWithDeclarationKey','KeyRotationDoesNotRebindInit',
+             'SignedInitKeyNotJournaled'):
+   self.assertIn('TestMP06HF02'+id,fixtures)
  def test_ci05_runs_mp06_and_compiles_media_module(self):
   policy=read('scripts/ci/xgo_ci_policy.py')
   for a in ('MP06_PYTHON = [','tests.update(MP06_PYTHON)',

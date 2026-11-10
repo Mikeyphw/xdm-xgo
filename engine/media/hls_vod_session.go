@@ -95,9 +95,15 @@ func mp06MediaPlan(role, uri, body string) (HLSVODTrackPlan, error) {
 		if seg.Protection != HLSProtectionNone && seg.Protection != HLSProtectionAES128 {
 			return HLSVODTrackPlan{}, ErrHLSVODSelection
 		}
-		if seg.Map != nil && seg.Key != nil && seg.Key.Method == HLSProtectionAES128 && strings.TrimSpace(seg.Key.IV) == "" {
-			return HLSVODTrackPlan{}, ErrHLSVODSelection // encrypted init-map requires explicit IV
-		}
+		if seg.Map != nil {
+            initKey := seg.Map.Key
+            // Only keys active at EXT-X-MAP declaration protect init bytes.
+            if initKey != nil && initKey.Method != HLSProtectionNone {
+                if initKey.Method != HLSProtectionAES128 || strings.TrimSpace(initKey.IV) == "" {
+                    return HLSVODTrackPlan{}, ErrHLSVODSelection
+                }
+            }
+        }
 		result.DurationSeconds += seg.Duration
 	}
 	if result.ExpectedParts == 0 {
