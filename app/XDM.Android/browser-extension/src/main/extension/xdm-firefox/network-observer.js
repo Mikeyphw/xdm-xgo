@@ -19,6 +19,13 @@
   const POSSIBLE_OFFER_THRESHOLD = 700;
 
   const capturedHeaders = new Map();
+  // One manual review handoff per logical candidate, target and exact request.
+  // The guard is shared by popup and FAB and retires with navigation/site mode.
+  const manualDispatches = new Map();
+  const MANUAL_SEND_TTL_MS = 30000;
+  // Must remain epoch MILLISECONDS: MP01 encrypted-v2 handoff checks 45s freshness.
+  // Increment only to disambiguate same-millisecond onBeforeSendHeaders calls.
+  let lastRequestGeneration = Date.now();
   const tabDispatchSessions = new Map();
   const candidateStore = new globalThis.XdmCandidateStoreV1({ maxPerTab: MAX_CANDIDATES_PER_TAB, ttlMs: CANDIDATE_TTL_MS });
   const dispatchTimers = new Map();
@@ -49,6 +56,7 @@
   function revokeAllCaptureState() {
     const tabs = candidateStore.clearAll();
     capturedHeaders.clear();
+    manualDispatches.clear();
     for (const timer of dispatchTimers.values()) clearTimeout(timer);
     dispatchTimers.clear();
     lastDispatchedByTab.clear();
@@ -58,6 +66,9 @@
   }
 
   function forgetTabHeaders(tabId) {
+    for (const key of manualDispatches.keys()) {
+      if (key.startsWith(`${Number(tabId)}|`)) manualDispatches.delete(key);
+    }
     for (const [requestId, entry] of capturedHeaders) {
       if (Number(entry.tabId) === Number(tabId)) capturedHeaders.delete(requestId);
     }
@@ -528,7 +539,7 @@
     if (responseUrl && evidence) {
       added = mergeCandidate(tabId, Object.assign({}, evidence, {
         source: "webRequest",
-        contentType: evidence.contentType || observation.contentType || "",
+        contentType: evidence.contentType || "",
         bodyDerived: Boolean(observation.bodyExcerpt),
         // Headers, exact page/frame attribution and request fingerprint are preserved solely from webRequest evidence.
         headers: evidence.headers || {},
@@ -548,10 +559,12 @@
     if (bodyExcerpt && responseUrl && evidence) {
       const analysis = CORE.analyzeBody({
         text: bodyExcerpt,
-        contentType: evidence.contentType || observation.contentType || "",
+        contentType: evidence.contentType || "",
         responseUrl
       });
-      if (analysis.manifestBody) {
+      // Untrusted window messages cannot assert arbitrary manifest bytes. Require
+      // privileged response MIME for body corroboration, including extensionless URLs.
+      if (analysis.manifestBody && CORE.isManifest("", evidence.contentType)) {
         counter.bodyCandidates += 1;
         added = mergeCandidate(tabId, Object.assign({}, evidence, {
           source: "webRequest",
@@ -602,6 +615,28 @@
     const counter = counterFor(tabId);
     counter.frames.add(frameId);
     counter.lastSource = "frame-playback-hint";
+    if (value.blobPlayback === true) {
+      // Same-frame, short-lived, unambiguous *privileged MIME* only. Correlation
+      // remains tentative; it does NOT auto-offer or invent a blob download URL.
+      const possible = candidateStore.recentManifestEvidence(tabId, frameId, 12000);
+      if (possible.length !== 1) {
+        counter.lastSource = "blob-unsupported-or-ambiguous";
+        return false;
+      }
+      const proof = possible[0];
+      const added = mergeCandidate(tabId, Object.assign({}, proof, {
+        playbackCorrelation: "tentative-same-frame-network",
+        correlationEvidence: "privileged-media-response-mime",
+        // This is not proof that the blob belongs to this specific player.
+        playbackObserved: false,
+        autoOffer: false,
+        reason: "blob-network-correlation-tentative",
+        headers: proof.headers || {},
+        browserHandoff: proof.browserHandoff || null,
+      }));
+      if (added) updateBadge(tabId);
+      return added;
+    }
     const evidence = findPrivilegedEvidence(tabId, value.url, frameId);
     if (!evidence) return false;
     const added = mergeCandidate(tabId, Object.assign({}, evidence, {
@@ -657,6 +692,8 @@
         frameId: Number(candidate.frameId || 0),
         frameUrl: uiOnlyUrl(candidate.frameUrl || ""),
         playbackObserved: Boolean(candidate.playbackObserved),
+        playbackCorrelation: candidate.playbackCorrelation || "",
+        correlationEvidence: candidate.correlationEvidence || "",
         thumbnailUrl: "",
         protectedMedia: Boolean(candidate.protectedMedia),
         encryptedAes128: Boolean(candidate.encryptedAes128),
@@ -694,7 +731,21 @@
     const authoritative = proof && proof.requestFingerprint === selected.requestFingerprint &&
       String(proof.requestId || "") === String(selected.requestId || "") &&
       Number(proof.requestGeneration || 0) === Number(selected.requestGeneration || 0);
+    if (selected.requestId && !authoritative) {
+      throw new Error("Request-specific evidence expired. Refresh playback before sending.");
+    }
+    // Body relationship metadata comes from the untrusted page world. Display
+    // remains tentative; only independently observed exact frame requests may
+    // enter the encrypted executor as child track/variant URLs.
+    const confirmedChild = item => Boolean(item && item.url && (
+      CORE.exactRequestUrl(item.url) === CORE.exactRequestUrl(selected.url) ||
+      findPrivilegedEvidence(tabId, item.url, selected.frameId, 45 * 1000)
+    ));
     const candidate = Object.assign({}, selected, {
+      variantInfo: (selected.variantInfo || []).filter(confirmedChild).slice(0, 32),
+      trackInfo: (selected.trackInfo || []).filter(confirmedChild).slice(0, 32),
+      variantUrls: (selected.variantUrls || []).filter(url => confirmedChild({url})).slice(0, 32),
+      trackUrls: (selected.trackUrls || []).filter(url => confirmedChild({url})).slice(0, 32),
       streamKind: candidateStreamKind(selected),
       browserHandoff: Object.assign({}, selected.browserHandoff || {}, {
         // Proposed headers are for audit only; never promote them to runtime.
@@ -713,6 +764,15 @@
       scheme: globalThis.XdmExtensionConfig && globalThis.XdmExtensionConfig.xdmScheme,
     });
     if (!link) throw new Error("XDM needs a newly app-paired Firefox XPI for signed or authenticated media. Regenerate it from XDM settings.");
+    const freshTab = await browser.tabs.get(Number(tabId));
+    const freshCandidate = requireSingleSelectedCandidate(tabId, requestedIds, "XDM");
+    if (!freshTab || freshTab.url !== tab.url || !tabAllowed(freshTab.url) ||
+        freshCandidate.requestFingerprint !== selected.requestFingerprint ||
+        freshCandidate.frameId !== selected.frameId ||
+        (selected.requestId && !findPrivilegedEvidence(tabId, selected.url,
+          {requestId: selected.requestId, frameId: selected.frameId}, 45 * 1000))) {
+      throw new Error("Media or source tab changed during review. Refresh the picker.");
+    }
     await browser.tabs.executeScript(Number(tabId), {
       code: `(() => { location.href = ${JSON.stringify(link)}; return true; })();`,
       frameId: 0,
@@ -729,19 +789,64 @@
     if (!tabAllowed(tab.url)) throw new Error("This site is disabled by XDM site-mode settings.");
     const handoff = globalThis.XdmHandoffV1;
     if (!handoff || typeof handoff.buildOneDm !== "function") throw new Error("1DM+ handoff builder is unavailable.");
+    const proof = selected.requestId ? findPrivilegedEvidence(tabId, selected.url,
+      {requestId: selected.requestId, frameId: selected.frameId}, 45 * 1000) : null;
+    if (selected.requestId && (!proof || proof.requestFingerprint !== selected.requestFingerprint)) {
+      throw new Error("Signed URL expired or replaced. Refresh playback before sending to 1DM+.");
+    }
+    // An external 1DM+ intent cannot carry MP01's encrypted-v2 credentials.
+    // Never infer that a query parameter is public from its name. Some providers
+    // use opaque short query keys (e.g. ?k=...) as signed credentials.
+    const externalUrl = new URL(selected.url);
+    if (externalUrl.search || CORE.logicalMediaUrl(selected.url) !== CORE.exactRequestUrl(selected.url)) {
+      throw new Error("Signed media URLs require XDM encrypted capture; 1DM+ handoff refused.");
+    }
+    if (proof && proof.headers && (proof.headers.authorization || proof.headers.cookie)) {
+      throw new Error("1DM+ cannot safely receive authenticated request headers. Send this media to XDM.");
+    }
     const link = handoff.buildOneDm({
-      url: selected.canonicalUrl || CORE.logicalMediaUrl(selected.url),
+      url: selected.url,
       pageUrl: tab.url,
       title: tab.title || selected.title || "Detected media",
       contentType: selected.contentType || selected.mimeType || "",
     });
     if (!link) throw new Error("1DM+ could not build a handoff for the selected media.");
+    const freshTab = await browser.tabs.get(Number(tabId));
+    const stillSelected = requireSingleSelectedCandidate(tabId, requestedIds, "1DM+");
+    if (!freshTab || freshTab.url !== tab.url || !tabAllowed(freshTab.url) ||
+        stillSelected.requestFingerprint !== selected.requestFingerprint) {
+      throw new Error("Media or source tab changed during 1DM+ review. Refresh the picker.");
+    }
     await browser.tabs.executeScript(Number(tabId), {
       code: `(() => { location.href = ${JSON.stringify(link)}; return true; })();`,
       frameId: 0,
       runAt: "document_idle"
     });
     return { ok: true, sentCount: 1, selectedCount: 1, mode: "single" };
+  }
+
+  async function sendExactlyOnce(tabId, requestedIds, target) {
+    const selected = requireSingleSelectedCandidate(tabId, requestedIds, target === "1dm" ? "1DM+" : "XDM");
+    const key = `${Number(tabId)}|${target}|${selected.logicalMediaId || selected.stableMediaId}|${selected.requestFingerprint}`;
+    const now = Date.now();
+    for (const [id, state] of manualDispatches) {
+      if (now - state.at > MANUAL_SEND_TTL_MS) manualDispatches.delete(id);
+    }
+    const prior = manualDispatches.get(key);
+    if (prior) return prior.promise.then(result => Object.assign({}, result, {
+      sentCount: 0, deduplicated: true
+    }));
+    if (manualDispatches.size >= 128) {
+      return Promise.resolve({ok:false, sentCount:0, error:"Too many pending media handoffs; retry later."});
+    }
+    const promise = target === "1dm"
+      ? sendLogicalCandidatesToOneDm(tabId, requestedIds)
+      : sendLogicalCandidates(tabId, requestedIds);
+    manualDispatches.set(key, {at: now, promise});
+    promise.catch(() => { // An actual failure is retryable; success is exactly-once for the TTL.
+      if (manualDispatches.get(key)?.promise === promise) manualDispatches.delete(key);
+    });
+    return promise;
   }
 
   function updateBadge(tabId) {
@@ -761,11 +866,11 @@
       }
       if (message && message.type === SEND_LOGICAL_CANDIDATES_TYPE) {
         const tabId = Number(message.tabId != null ? message.tabId : sender && sender.tab && sender.tab.id);
-        return sendLogicalCandidates(tabId, message.logicalMediaIds).catch(error => ({ ok: false, error: error && error.message ? error.message : String(error) }));
+        return sendExactlyOnce(tabId, message.logicalMediaIds, "xdm").catch(error => ({ ok: false, error: error && error.message ? error.message : String(error) }));
       }
       if (message && message.type === SEND_LOGICAL_CANDIDATES_1DM_TYPE) {
         const tabId = Number(message.tabId != null ? message.tabId : sender && sender.tab && sender.tab.id);
-        return sendLogicalCandidatesToOneDm(tabId, message.logicalMediaIds).catch(error => ({ ok: false, error: error && error.message ? error.message : String(error) }));
+        return sendExactlyOnce(tabId, message.logicalMediaIds, "1dm").catch(error => ({ ok: false, error: error && error.message ? error.message : String(error) }));
       }
     } catch (error) {
       publishStatus({ lastError: error && error.message ? error.message : String(error), lastErrorAt: Date.now() });
@@ -781,8 +886,9 @@
         capturedHeaders.set(details.requestId, {
           at: Date.now(),
           requestId: String(details.requestId || ""),
+          exactSentUrl: CORE.exactRequestUrl(details.url),
           tabId: Number(details.tabId),
-          requestGeneration: Date.now(),
+          requestGeneration: (lastRequestGeneration = Math.max(Date.now(), lastRequestGeneration + 1)),
           proposedHeaders: captureUsefulHeaders(details.requestHeaders),
           finalHeaders: {},
           finalHeadersAvailable: false,
@@ -804,6 +910,7 @@
           if (!tabUrlAllowedForCapture(details)) return;
           const previous = capturedHeaders.get(details.requestId) || { at: Date.now(), requestId: String(details.requestId || ""), proposedHeaders: {} };
           previous.finalHeaders = captureUsefulHeaders(details.requestHeaders);
+          previous.exactSentUrl = CORE.exactRequestUrl(details.url);
           previous.finalHeadersAvailable = true;
           previous.finalUnavailableReason = "";
           capturedHeaders.set(details.requestId, previous);
@@ -823,6 +930,16 @@
         const priorDocument = !hasDocument && captured && Number(captured.tabId) === Number(details.tabId) &&
           tabAllowed(captured.frameUrl || captured.tabUrl || "");
         if (!fromDocument && !priorDocument) return;
+        // Never reuse a previous redirect hop's Authorization/Cookie on a
+        // different final response URL or frame, even for a reused requestId.
+        const sameHop = captured && captured.exactSentUrl === CORE.exactRequestUrl(details.url) &&
+          Number(captured.tabId) === Number(details.tabId) &&
+          Number(captured.frameId || 0) === Number(details.frameId || 0);
+        const requestProof = sameHop ? captured : null;
+        // Proposed headers remain audit-only even across redirect hop mismatch.
+        const handoffContext = sameHop ? captured : captured ? Object.assign({}, captured, {
+          finalHeadersAvailable: false, finalHeaders: {}, finalUnavailableReason: "response-hop-mismatch"
+        }) : null;
         addClassifiedResponse(details.tabId, {
           url: details.url,
           contentType: headerValue(details.responseHeaders, "content-type"),
@@ -833,8 +950,8 @@
           frameId: details.frameId,
           frameUrl: details.originUrl || details.documentUrl || "",
           requestId: details.requestId,
-          requestGeneration: captured && captured.requestGeneration || Date.now()
-        }, finalHeadersForExecution(captured), "webRequest", captured);
+          requestGeneration: requestProof && requestProof.requestGeneration || Date.now()
+        }, finalHeadersForExecution(requestProof), "webRequest", handoffContext);
       },
       { urls: ["<all_urls>"] },
       ["responseHeaders"]

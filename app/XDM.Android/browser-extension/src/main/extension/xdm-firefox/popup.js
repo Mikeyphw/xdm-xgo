@@ -16,6 +16,8 @@ let diagnosticTimer = null;
 
 let logicalCandidates = [];
 let selectedLogicalCandidateId = "";
+let logicalSendInFlight = false;
+let logicalSentKey = "";
 
 function selectedLogicalId() {
   return selectedLogicalCandidateId;
@@ -30,14 +32,14 @@ function updateSendSelectedButton() {
   const xdmButton = document.getElementById("sendSelectedMedia");
   const oneDmButton = document.getElementById("sendSelectedMedia1Dm");
   const candidate = selectedCandidate();
-  const enabled = Boolean(activeTab && candidate);
+  const enabled = Boolean(activeTab && candidate) && !logicalSendInFlight;
   if (xdmButton) {
     xdmButton.textContent = "Send to XDM";
-    xdmButton.disabled = !enabled;
+    xdmButton.disabled = !enabled || Boolean(activeTab && logicalSentKey === `${activeTab.id}|xdm|${selectedLogicalId()}`);
   }
   if (oneDmButton) {
     oneDmButton.textContent = "Send to 1DM+";
-    oneDmButton.disabled = !enabled;
+    oneDmButton.disabled = !enabled || Boolean(activeTab && logicalSentKey === `${activeTab.id}|1dm|${selectedLogicalId()}`);
   }
 
   document.querySelectorAll("#logicalMediaCandidates .candidate-row").forEach(row => {
@@ -282,14 +284,18 @@ async function refreshLogicalCandidates() {
 }
 
 async function sendSelectedLogicalCandidate(target) {
-  if (!activeTab || typeof activeTab.id !== "number") return;
+  if (!activeTab || typeof activeTab.id !== "number" || logicalSendInFlight) return;
   const id = selectedLogicalId();
+  const sendKey = `${activeTab.id}|${target}|${id}`;
+  if (id && logicalSentKey === sendKey) return;
   if (!id) {
     setStatus("Choose one media item first.", "error");
     return;
   }
   const isOneDm = target === "1dm";
   const button = document.getElementById(isOneDm ? "sendSelectedMedia1Dm" : "sendSelectedMedia");
+  logicalSendInFlight = true;
+  updateSendSelectedButton();
   if (button) button.disabled = true;
   try {
     const result = await browser.runtime.sendMessage({
@@ -298,10 +304,14 @@ async function sendSelectedLogicalCandidate(target) {
       logicalMediaIds: [id]
     });
     if (!result || result.ok !== true) throw new Error(result && result.error || `${isOneDm ? "1DM+" : "XDM"} handoff failed`);
+    logicalSentKey = sendKey;
     setStatus(`Sent the selected media item to ${isOneDm ? "1DM+" : "XDM"}.`, "ok");
   } catch (error) {
     setStatus(error && error.message ? error.message : String(error), "error");
-  } finally { updateSendSelectedButton(); }
+  } finally {
+    logicalSendInFlight = false;
+    updateSendSelectedButton();
+  }
 }
 
 async function sendSelectedLogicalCandidates() { return sendSelectedLogicalCandidate("xdm"); }

@@ -245,16 +245,12 @@ assert.strictEqual(events.message.listeners.length, 1, "page observation receive
     }
   }, { tab: { id: 11 }, frameId: 0, url: "https://page.example/watch/11" });
   await new Promise(resolve => setTimeout(resolve, 650));
-  assert.ok(executeCalls.length > beforeWeakManifest, "verified HLS body promotes retained privileged evidence to a visible strong candidate");
-  diagnostics = storageState.xdmNetworkDiagnosticsV1;
-  assert.strictEqual(diagnostics["11"].reason, "hls-body");
-  assert.strictEqual(diagnostics["11"].quality, "strong");
+  assert.strictEqual(executeCalls.length, beforeWeakManifest,
+    "Untrusted HLS body cannot promote suffix-only HTTP response evidence");
   const chooser11 = await messageListener({ type: "xdmGetLogicalCandidatesV2", tabId: 11 }, {});
-  assert.ok(chooser11.candidates.length > 0, "promoted HLS media must be selectable");
-  const selection11 = await messageListener({ type: "xdmSendLogicalCandidatesV2", tabId: 11, logicalMediaIds: [chooser11.candidates[0].logicalMediaId] }, {});
-  assert.strictEqual(selection11.ok, true, selection11.error || "selected HLS send failed");
-  const tab11Handoff = handoffInputs.slice().reverse().find(input => input.pageUrl === "https://page.example/watch/11");
-  assert.ok(tab11Handoff && tab11Handoff.candidates[0].browserHandoff.proposedHeaders.headers["accept-language"] === "pt-BR", "Accept-Language must survive privileged request capture");
+  assert.strictEqual(chooser11.candidates.length, 0, "No privileged manifest MIME, no strong picker row");
+  assert.strictEqual(handoffInputs.some(input => input.pageUrl === "https://page.example/watch/11"), false,
+    "Forged manifest body must not invoke handoff");
 
 
   // Parity02: a child media playlist, its many segments, a late master playlist, and a poster

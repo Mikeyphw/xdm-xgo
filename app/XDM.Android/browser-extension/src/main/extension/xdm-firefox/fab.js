@@ -46,6 +46,8 @@
   let selectedLogicalId = "";
   let pickerStatus = "";
   let pickerStatusKind = "";
+  let pickerSendInFlight = false;
+  let pickerSentKey = "";
 
   function clampNumber(value, fallback, minimum, maximum) {
     const number = Number(value);
@@ -340,6 +342,7 @@
       detailLine("Quality", candidate.quality),
       detailLine("Confidence", Number(candidate.confidence || 0) > 0 ? candidate.confidence : ""),
       detailLine("Evidence", candidate.reason),
+      detailLine("Playback correlation", candidate.playbackCorrelation),
       detailLine("Page", candidate.pageUrl || location.href),
       detailLine("Frame", candidate.frameUrl),
       detailLine("Media URL", candidate.url),
@@ -388,12 +391,15 @@
   }
 
   async function sendSelected(target) {
+    const sendKey = `${target}|${selectedLogicalId}`;
+    if (pickerSendInFlight || (selectedLogicalId && pickerSentKey === sendKey)) return;
     if (!selectedLogicalId) {
       pickerStatus = "Choose one media item first.";
       pickerStatusKind = "error";
       render();
       return;
     }
+    pickerSendInFlight = true;
     pickerLoading = true;
     pickerStatus = `Sending selected media to ${target === "1dm" ? "1DM+" : "XDM"}…`;
     pickerStatusKind = "";
@@ -405,12 +411,14 @@
       });
       if (!result || result.ok !== true) throw new Error(result && result.error || "Media handoff failed");
       pickerStatus = `Sent selected media to ${target === "1dm" ? "1DM+" : "XDM"}.`;
+      pickerSentKey = sendKey;
       pickerStatusKind = "ok";
       pickerOpen = false;
     } catch (error) {
       pickerStatus = error && error.message ? error.message : String(error);
       pickerStatusKind = "error";
     } finally {
+      pickerSendInFlight = false;
       pickerLoading = false;
       render();
     }
@@ -454,7 +462,7 @@
     const xdm = make("button", "xdm-picker-button xdm-picker-button-primary", "Send to XDM");
     const oneDm = make("button", "xdm-picker-button", "Send to 1DM+");
     xdm.type = oneDm.type = "button";
-    xdm.disabled = oneDm.disabled = pickerLoading || !selectedLogicalId;
+    xdm.disabled = oneDm.disabled = pickerLoading || pickerSendInFlight || !selectedLogicalId;
     xdm.addEventListener("click", () => sendSelected("xdm"));
     oneDm.addEventListener("click", () => sendSelected("1dm"));
     footer.append(xdm, oneDm);
@@ -464,6 +472,7 @@
   }
 
   function openPicker() {
+    pickerSentKey = "";
     pickerOpen = true;
     expanded = false;
     pickerStatus = "";

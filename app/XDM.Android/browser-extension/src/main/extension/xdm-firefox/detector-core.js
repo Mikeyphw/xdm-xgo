@@ -300,13 +300,20 @@
     const responseUrl = String(input && input.responseUrl || "");
     const hlsBody = /^#EXTM3U(?:\r?\n|$)/i.test(trimmed);
     const dashBody = /^<\?xml\s[^>]{0,256}\?>\s*<MPD(?:\s|>)|^<MPD(?:\s|>)/i.test(trimmed) && !/<!\s*(?:DOCTYPE|ENTITY)\b/i.test(trimmed);
-    const manifestBody = hlsBody || dashBody;
+    const hardNonMedia = HARD_NON_MEDIA_MIME_RE.test(contentType);
+    const hlsStructure = /^#EXTM3U(?:\r?\n|$)/i.test(trimmed) &&
+      /(?:^|\n)\s*#(?:EXT-X-(?:STREAM-INF|MEDIA|TARGETDURATION|VERSION|MAP|PLAYLIST-TYPE|ENDLIST)|EXTINF)\b/i.test(trimmed);
+    const dashStructure = dashBody && /<\/?(?:Period|AdaptationSet|Representation|SegmentTemplate|SegmentList|BaseURL)\b/i.test(trimmed);
+    const manifestBody = !hardNonMedia && ((hlsBody && hlsStructure) || (dashBody && dashStructure));
+    // JSON/player configuration may still provide *untrusted* URL hints that
+    // must be matched with privileged requests; do not erase this existing
+    // capability just to harden manifest body authority.
     const candidates = extractCandidatesFromText(text, responseUrl);
 
     return {
       manifestBody,
-      hlsBody,
-      dashBody,
+      hlsBody: manifestBody && hlsBody,
+      dashBody: manifestBody && dashBody,
       candidates,
       inspectable: isInspectableTextMime(contentType)
     };

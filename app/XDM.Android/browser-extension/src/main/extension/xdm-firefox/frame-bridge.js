@@ -47,6 +47,7 @@
   };
   const candidates = new Map();
   const encrypted = new WeakSet();
+  const lastBlobObservationAt = new WeakMap();
   const timers = new WeakMap();
   let lastOffer = { key: "", at: 0 };
   let inlineScanDone = false;
@@ -392,6 +393,19 @@ ${location.href}`;
     if (!(video instanceof HTMLVideoElement)) return false;
     if (!settings.autoDetectPlayingVideos || !hostAllowed()) return false;
     if (encrypted.has(video) || video.paused || video.ended || video.readyState < 1) return false;
+    // MSE/blob is not an executable URL. Never choose an unrelated resource
+    // from the page candidate map and pretend it is the playing media.
+    const current = String(video.currentSrc || video.src || "");
+    if (/^blob:/i.test(current)) {
+      const now = Date.now();
+      if (now - Number(lastBlobObservationAt.get(video) || 0) < 2500) return false;
+      lastBlobObservationAt.set(video, now);
+      return sendBackground({ type: PLAYBACK_TYPE, candidate: {
+        blobPlayback: true,
+        durationMs: elementMetadata(video).durationMs,
+        observedAt: Date.now()
+      }});
+    }
     const candidate = bestCandidate(video);
     return presentPlayingCandidate(candidate);
   }
