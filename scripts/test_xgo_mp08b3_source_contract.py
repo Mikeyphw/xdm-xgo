@@ -45,7 +45,7 @@ def workflow_contract(s):
      'Enable runner KVM for real API36 instrumentation',
      'MP08B3_KVM_OPEN_PASS', 'MP08B3_KVM_ACCESS_READY',
      'android-emulator-runner@', 'api-level: 36', 'target: google_apis',
-     'arch: x86_64', 'testInstrumentationRunnerArguments.class=com.mikeyphw.xdm.android.MP08B3MediaStoreAcceptanceInstrumentedTest',
+     'arch: x86_64', 'script: python3 -B scripts/test_xgo_mp08b3_source_contract.py --api36-execute',
      ':app:compileDebugAndroidTestKotlin', 'mp08b3_real_media.py',
      'Install pinned Ubuntu 24.04 FFmpeg and FFprobe',
      'sudo apt-get update -qq',
@@ -68,9 +68,9 @@ def workflow_contract(s):
      'if: >-'))
  # Both the emulator and final receipt must be gated by an explicit
  # same-repository label, rather than silently activating on ordinary PR sync.
- if s.count("github.event.label.name == 'xgo-mp08b3-api36'") < 4 or s.count('github.event.pull_request.head.repo.full_name == github.repository') < 3:
+ if s.count("github.event.label.name == 'xgo-mp08b3-api36'") != 5 or s.count('github.event.pull_request.head.repo.full_name == github.repository') != 4:
   raise AssertionError('MP08B3_SOURCE_REFUSED: opt-in guard absent from a job')
- if s.count('github.event.pull_request.head.sha || inputs.exact_head_sha') != 4:
+ if s.count('github.event.pull_request.head.sha || inputs.exact_head_sha') != 5:
   raise AssertionError('MP08B3_SOURCE_REFUSED: explicit PR head SHA binding weakened')
  if s.count('github.event_name == \'workflow_dispatch\'') < 3:
   raise AssertionError('MP08B3_SOURCE_REFUSED: original manual trigger removed')
@@ -115,80 +115,162 @@ def kvm_bootstrap_contract(s):
   raise AssertionError('MP08B3_SOURCE_REFUSED: no bypass of KVM readiness')
 
 def api36_execution_contract(s):
- # Triggered by real HF03 incident 42893899222: emulator boots, runner
- # invokes `sh -c`, and bare `set -euo pipefail` fails before Gradle.
+ """Match emulator-runner's actual behavior: ONE shell command per line."""
  job = s.split('  api36-real-android:', 1)[1].split('  manual-qualification:', 1)[0]
- name = '      - name: API36 instrumentation, real MediaStore and required attested FFmpeg/FFprobe'
- if job.count(name) != 1: raise AssertionError('MP08B3_API36_REFUSED: missing action')
- stage = job.split(name, 1)[1]
- if stage.count('          script: |\n') != 1:
-  raise AssertionError('MP08B3_API36_REFUSED: inline script anchor changed')
- raw = stage.split('          script: |\n', 1)[1]
- if any(line.strip() and not line.startswith('            ') for line in raw.splitlines()):
-  raise AssertionError('MP08B3_API36_REFUSED: malformed YAML script indentation')
- script = '\n'.join(line[12:] for line in raw.splitlines()) + '\n'
- require(script, ("bash -euo pipefail <<'MP08B3_API36_BASH'",
-   'MP08B3_API36_BASH\n', 'set -euo pipefail',
-   "test \"$(adb shell getprop ro.build.version.sdk | tr -d '\\r')\" = 36",
-   "test \"$(adb shell getprop ro.kernel.qemu | tr -d '\\r')\" = 1",
-   'rm -rf app/build/outputs/androidTest-results/connected',
-   ':app:connectedDebugAndroidTest',
-   '-Pandroid.testInstrumentationRunnerArguments.class=com.mikeyphw.xdm.android.MP08B3MediaStoreAcceptanceInstrumentedTest',
-   "python3 - <<'MP08B3_API36_JUNIT'",
-   'MP08B3_API36_JUNIT\n',
-   'xml.etree.ElementTree as ET',
-   "root.rglob('*.xml')", "klass == suffix", 'len(names) != 4',
-   'set(names) != expected', "('failure','error','skipped')",
-   'MP08B3_API36_FOUR_REAL_INSTRUMENTATION_TESTS_PASS'))
- if script.splitlines()[3] != "bash -euo pipefail <<'MP08B3_API36_BASH'":
-  raise AssertionError('MP08B3_API36_REFUSED: sh must launch Bash before pipefail')
- if script.count('MP08B3_API36_BASH') != 2 or script.count('MP08B3_API36_JUNIT') != 2:
-  raise AssertionError('MP08B3_API36_REFUSED: unbalanced heredoc markers')
- if script.index('rm -rf app/build/outputs/androidTest-results/connected') > script.index('./gradlew'):
-  raise AssertionError('MP08B3_API36_REFUSED: stale instrumentation receipt could be reused')
- if script.index('./gradlew') > script.index('python3 - <<'):
-  raise AssertionError('MP08B3_API36_REFUSED: evidence read before Gradle tests')
- if any(marker in script for marker in ('|| true', 'continue-on-error:', 'Assume.', '@Ignore', 'pytest.skip')):
-  raise AssertionError('MP08B3_API36_REFUSED: acceptance bypass')
- # Runs without Android, but under the EXACT POSIX shell used by emulator-runner.
- # No dependency on YAML parser or native emulator for this stage contract.
+ stage_name = '      - name: API36 instrumentation, real MediaStore and required attested FFmpeg/FFprobe'
+ if job.count(stage_name) != 1:
+  raise AssertionError('MP08B3_API36_REFUSED: missing uniquely named job')
+ stage = job.split(stage_name,1)[1]
+ require(stage, (
+  'uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d',
+  'MP08B3_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || inputs.exact_head_sha }}',
+  "MP08B3_OPTED_IN: ${{ (github.event_name == 'workflow_dispatch' && inputs.x86_64_media_test == true) ||",
+  "github.event.label.name == 'xgo-mp08b3-api36'",
+  'github.event.pull_request.head.repo.full_name == github.repository',
+  'api-level: 36', 'arch: x86_64'))
+ commands = re.findall(r'(?m)^\s*script:\s*(.+?)\s*$',stage)
+ expected = 'python3 -B scripts/test_xgo_mp08b3_source_contract.py --api36-execute'
+ if commands != [expected] or re.search(r'(?m)^\s*script:\s*[>|]\s*$',stage):
+  raise AssertionError('MP08B3_API36_REFUSED: one-line POSIX-safe action command required')
+ if 'continue-on-error: true' in stage or '|| true' in stage:
+  raise AssertionError('MP08B3_API36_REFUSED: action failure bypass forbidden')
+ # This command must parse and run under /bin/sh; no Bash or heredocs.
  import subprocess
- parsed = subprocess.run(['/bin/sh','-n','-c',script], capture_output=True, text=True)
- if parsed.returncode:
-  raise AssertionError('MP08B3_API36_REFUSED: sh script parse failed: '+parsed.stderr)
- return script
+ parsed=subprocess.run(['/bin/sh','-n','-c',commands[0]],capture_output=True,text=True)
+ if parsed.returncode:raise AssertionError('MP08B3_API36_REFUSED: invalid POSIX action command')
+ return expected
 
-def execute_api36_mock(script, *, api='36', qemu='1', suite='pass', gradle_rc=0):
- import tempfile, subprocess, os, stat, html
+API36_CLASS='com.mikeyphw.xdm.android.MP08B3MediaStoreAcceptanceInstrumentedTest'
+API36_CASES=frozenset((
+ 'b3_01RealMediaStorePublicationReadbackAndIdempotency',
+ 'b3_02NoAuthorizationAndCorruptedCandidateFailClosed',
+ 'b3_03InterruptedPendingMediaStoreRowIsReconciled',
+ 'b3_04RealEmbeddedFfmpegProbeMuxAndMediaStoreRoundTrip',
+))
+API36_SERIAL='emulator-5554'
+
+
+def api36_receipt_contract(directory):
+ """Strict, fresh, local JUnit evidence from Gradle connectedDebugAndroidTest."""
  from pathlib import Path
- with tempfile.TemporaryDirectory(prefix='mp08b3-api36-shell-') as t:
-  root=Path(t); bin=root/'bin'; bin.mkdir()
-  adb=bin/'adb'
-  adb.write_text('#!/bin/sh\ncase "$*" in\n'
-   '"shell getprop ro.build.version.sdk") echo "'+api+'" ;;\n'
-   '"shell getprop ro.kernel.qemu") echo "'+qemu+'" ;;\n'
-   '*) exit 22 ;;\nesac\n', encoding='utf-8')
-  adb.chmod(0o755)
-  android=root/'app/XDM.Android'; android.mkdir(parents=True)
+ import xml.etree.ElementTree as ET
+ root=Path(directory)
+ if not root.is_dir() or root.is_symlink():
+  raise AssertionError('MP08B3_API36_REFUSED: fresh JUnit results directory absent')
+ docs=sorted(root.rglob('*.xml'))
+ if not docs or len(docs)>30:
+  raise AssertionError('MP08B3_API36_REFUSED: no bounded fresh JUnit XML')
+ matches=[]
+ for file in docs:
+  if file.is_symlink() or not file.is_file() or file.stat().st_size>5_000_000:
+   raise AssertionError('MP08B3_API36_REFUSED: unsafe JUnit file')
+  data=file.read_bytes()
+  if b'<!DOCTYPE' in data.upper() or b'<!ENTITY' in data.upper():
+   raise AssertionError('MP08B3_API36_REFUSED: untrusted XML DTD')
+  try: report=ET.fromstring(data)
+  except ET.ParseError as exc:
+   raise AssertionError('MP08B3_API36_REFUSED: malformed JUnit XML') from exc
+  for case in report.iter('testcase'):
+   if case.get('classname','') == API36_CLASS:
+    matches.append(case)
+ names=[c.get('name') for c in matches]
+ if len(names)!=4 or frozenset(names)!=API36_CASES:
+  raise AssertionError('MP08B3_API36_REFUSED: four unique real tests required: '+repr(names))
+ for case in matches:
+  if any(case.find(tag) is not None for tag in ('failure','error','skipped')):
+   raise AssertionError('MP08B3_API36_REFUSED: failed/skipped Android test '+str(case.get('name')))
+ return True
+
+
+def run_api36_acceptance():
+ """Executed only in an opt-in GitHub Actions API36 emulator job."""
+ import os, shutil, subprocess
+ from pathlib import Path
+ env=os.environ
+ if (env.get('GITHUB_ACTIONS'),env.get('RUNNER_OS'),env.get('GITHUB_REPOSITORY'),env.get('MP08B3_OPTED_IN')) != ('true','Linux','Mikeyphw/xdm-xgo','true'):
+  raise AssertionError('MP08B3_API36_REFUSED: opt-in hosted runner provenance missing')
+ expected=env.get('MP08B3_EXPECTED_HEAD','')
+ if not re.fullmatch('[0-9a-f]{40}',expected):
+  raise AssertionError('MP08B3_API36_REFUSED: missing exact PR head SHA')
+ def run(argv,cwd=None,timeout=240):
+  return subprocess.run(argv,cwd=cwd,check=True,text=True,capture_output=True,timeout=timeout).stdout.strip()
+ repo=Path(__file__).resolve().parents[1]
+ if run(['git','rev-parse','HEAD'],repo)!=expected:
+  raise AssertionError('MP08B3_API36_REFUSED: checked-out git head mismatch')
+ lines=run(['adb','devices','-l']).splitlines()
+ devices=[line.split() for line in lines[1:] if line.strip()]
+ if len(devices)!=1 or len(devices[0])<2 or devices[0][0]!=API36_SERIAL or devices[0][1]!='device':
+  raise AssertionError('MP08B3_API36_REFUSED: exact single authorized emulator required')
+ def prop(key):return run(['adb','-s',API36_SERIAL,'shell','getprop',key],timeout=25).strip()
+ for key,required in (
+  ('ro.build.version.sdk','36'),
+  ('ro.kernel.qemu','1'),
+  ('ro.product.cpu.abi','x86_64'),
+  ('sys.boot_completed','1'),
+ ):
+  if prop(key)!=required:
+   raise AssertionError('MP08B3_API36_REFUSED: wrong Android property '+key)
+ print('MP08B3_API36_EXACT_HEAD_AND_EMULATOR_PASS',flush=True)
+ android=repo/'app/XDM.Android'
+ output=android/'app/build/outputs/androidTest-results/connected'
+ if output.is_symlink() or any(node.is_symlink() for node in (output.parent,output.parent.parent,output.parent.parent.parent)):
+  raise AssertionError('MP08B3_API36_REFUSED: unsafe JUnit output path')
+ if output.exists():shutil.rmtree(output)
+ result=subprocess.run(['./gradlew','--no-daemon','--max-workers=2',':app:connectedDebugAndroidTest',
+  '-Pandroid.testInstrumentationRunnerArguments.class='+API36_CLASS],cwd=android,check=False,timeout=3600)
+ if result.returncode!=0:
+  raise AssertionError('MP08B3_API36_REFUSED: real instrumentation Gradle failure rc='+str(result.returncode))
+ api36_receipt_contract(output)
+ print('MP08B3_API36_FOUR_REAL_INSTRUMENTATION_TESTS_PASS',flush=True)
+ return True
+
+
+def execute_api36_mock(command, *, sdk='36', qemu='1', abi='x86_64', boot='1', suite='pass', gradle_rc=0,
+                      head=True, opted=True, offline=False, extra_device=False):
+ """Model the REAL action by invoking ONE command via /bin/sh -c."""
+ import tempfile, subprocess, os, html
+ from pathlib import Path
+ with tempfile.TemporaryDirectory(prefix='mp08b3-linewise-') as t:
+  root=Path(t);bin=root/'bin';bin.mkdir();scripts=root/'scripts';scripts.mkdir()
+  (scripts/'test_xgo_mp08b3_source_contract.py').write_text(Path(__file__).read_text(),encoding='utf-8')
+  mockhead='a'*40
+  (bin/'git').write_text('#!/bin/sh\n[ "$*" = "rev-parse HEAD" ] || exit 5\necho '+(mockhead if head else 'b'*40)+'\n')
+  (bin/'adb').write_text('#!/bin/sh\n'
+   'if [ "$*" = "devices -l" ]; then\n'
+   'printf "List of devices attached\\n'+API36_SERIAL+'\\t'+('offline' if offline else 'device')+' product:sdk\\n"\n'
+   +('printf "other-1234\\tdevice\\n"\n' if extra_device else '')+
+   'exit 0\nfi\n'
+   'case "$*" in\n'
+   '"-s emulator-5554 shell getprop ro.build.version.sdk") echo "'+sdk+'" ;;\n'
+   '"-s emulator-5554 shell getprop ro.kernel.qemu") echo "'+qemu+'" ;;\n'
+   '"-s emulator-5554 shell getprop ro.product.cpu.abi") echo "'+abi+'" ;;\n'
+   '"-s emulator-5554 shell getprop sys.boot_completed") echo "'+boot+'" ;;\n'
+   '*) exit 55 ;;\nesac\n')
+  android=root/'app/XDM.Android';android.mkdir(parents=True)
+  tests=sorted(API36_CASES)
+  names=tests
+  if suite=='three':names=tests[:3]
+  if suite=='wrong':names=tests[:3]+['unrelated_case']
+  if suite=='duplicate':names=tests+[tests[0]]
+  if suite=='wrongclass':names=tests
+  xml='<testsuite>'+''.join('<testcase classname="'+('not.the.test.Class' if suite=='wrongclass' else API36_CLASS)+'" name="'+html.escape(name,quote=True)+'">'+(
+    '<skipped/>' if suite=='skipped' and i==0 else '<error/>' if suite=='error' and i==0 else '<failure/>' if suite=='fail' and i==0 else '')+'</testcase>' for i,name in enumerate(names))+'</testsuite>'
+  if suite=='malformed':xml='<testsuite invalid'
+  if suite=='dtd':xml='<!DOCTYPE a [<!ENTITY x SYSTEM "file:///etc/passwd">]>'+xml
+  if suite=='missing':xml=''
   gradle=android/'gradlew'
-  tests=['b3_01RealMediaStorePublicationReadbackAndIdempotency',
-   'b3_02NoAuthorizationAndCorruptedCandidateFailClosed',
-   'b3_03InterruptedPendingMediaStoreRowIsReconciled',
-   'b3_04RealEmbeddedFfmpegProbeMuxAndMediaStoreRoundTrip']
-  kind=tests if suite not in ('missing','three','wrong') else tests[:3]
-  if suite=='wrong':kind=tests[:3]+['unrelated_nonreal_test']
-  if suite=='duplicate':kind=tests+[tests[0]]
-  xml='<testsuite>'+''.join('<testcase classname="com.mikeyphw.xdm.android.MP08B3MediaStoreAcceptanceInstrumentedTest" name="'+html.escape(n,quote=True)+'">'+(
-   '<skipped/>' if suite=='skipped' and i==0 else '<failure/>' if suite=='fail' and i==0 else '')+'</testcase>' for i,n in enumerate(kind))+'</testsuite>'
-  gradle.write_text('#!/bin/sh\n[ "$#" -ge 3 ] || exit 99\n'
-   'case "$*" in *:app:connectedDebugAndroidTest*) ;; *) exit 98 ;; esac\n'
-   'case "$*" in *testInstrumentationRunnerArguments.class=com.mikeyphw.xdm.android.MP08B3MediaStoreAcceptanceInstrumentedTest*) ;; *) exit 97 ;; esac\n'
+  import shlex
+  gradle.write_text('#!/bin/sh\n'
+   'case "$*" in *:app:connectedDebugAndroidTest*) ;; *) exit 90 ;; esac\n'
+   'case "$*" in *testInstrumentationRunnerArguments.class='+API36_CLASS+'*) ;; *) exit 91 ;; esac\n'
    'mkdir -p app/build/outputs/androidTest-results/connected\n'
-   + ('printf %s '+repr(xml)+ ' > app/build/outputs/androidTest-results/connected/TEST-mock.xml\n' if suite!='missing' else '')
-   +'exit '+str(gradle_rc)+'\n',encoding='utf-8')
-  gradle.chmod(0o755)
-  env={**os.environ,'PATH':str(bin)+os.pathsep+os.environ.get('PATH',''),'TMPDIR':str(root)}
-  return subprocess.run(['/bin/sh','-c',script],cwd=root,env=env,capture_output=True,text=True,timeout=15)
+   + ('printf %s '+shlex.quote(xml)+' > app/build/outputs/androidTest-results/connected/TEST-fresh.xml\n' if xml else '')
+   +'exit '+str(gradle_rc)+'\n')
+  for item in (bin/'git',bin/'adb',gradle):item.chmod(0o755)
+  env={**os.environ,'PATH':str(bin)+os.pathsep+os.environ.get('PATH',''),
+       'GITHUB_ACTIONS':'true','RUNNER_OS':'Linux','GITHUB_REPOSITORY':'Mikeyphw/xdm-xgo',
+       'MP08B3_EXPECTED_HEAD':mockhead,'MP08B3_OPTED_IN':'true' if opted else 'false'}
+  return subprocess.run(['/bin/sh','-c',command],cwd=root,env=env,capture_output=True,text=True,timeout=25)
 
 def host_contract(s):
  require(s, ('testsrc2=size=160x90:rate=10', 'sine=frequency=440:sample_rate=44100',
@@ -204,19 +286,21 @@ class MP08B3Contracts(unittest.TestCase):
  def test_android_real_mediastore_instrumentation(self):android_test_contract(read(ANDROID))
  def test_manual_emulator_gated_and_fail_closed(self):workflow_contract(read(WORKFLOW))
  def test_kvm_bootstrap_fails_closed(self):kvm_bootstrap_contract(read(WORKFLOW))
- def test_api36_real_posix_sh_launch_and_mocked_junit_receipts(self):
-  script=api36_execution_contract(read(WORKFLOW))
-  p=execute_api36_mock(script)
-  self.assertEqual(p.returncode,0, (p.stdout,p.stderr))
+ def test_api36_action_one_command_and_realistic_mock(self):
+  command=api36_execution_contract(read(WORKFLOW))
+  p=execute_api36_mock(command)
+  self.assertEqual(p.returncode,0,(p.stdout,p.stderr))
   self.assertIn('MP08B3_API36_FOUR_REAL_INSTRUMENTATION_TESTS_PASS',p.stdout)
-  for scenario in ('missing','three','wrong','duplicate','skipped','fail'):
+  for scenario in ('missing','three','wrong','duplicate','wrongclass','skipped','error','fail','malformed','dtd'):
    with self.subTest(scenario=scenario):
-    bad=execute_api36_mock(script,suite=scenario)
-    self.assertNotEqual(bad.returncode,0, (bad.stdout,bad.stderr))
+    bad=execute_api36_mock(command,suite=scenario)
+    self.assertNotEqual(bad.returncode,0,(bad.stdout,bad.stderr))
     self.assertNotIn('MP08B3_API36_FOUR_REAL_INSTRUMENTATION_TESTS_PASS',bad.stdout)
-  for settings in ({'api':'35'},{'qemu':'0'},{'gradle_rc':1}):
-   with self.subTest(settings=settings):
-    bad=execute_api36_mock(script,**settings)
+  for kwargs in ({'sdk':'35'},{'qemu':'0'},{'abi':'arm64-v8a'},
+                 {'boot':'0'},{'gradle_rc':1},{'head':False},
+                 {'opted':False},{'offline':True},{'extra_device':True}):
+   with self.subTest(kwargs=kwargs):
+    bad=execute_api36_mock(command,**kwargs)
     self.assertNotEqual(bad.returncode,0,(bad.stdout,bad.stderr))
     self.assertNotIn('MP08B3_API36_FOUR_REAL_INSTRUMENTATION_TESTS_PASS',bad.stdout)
  def test_host_real_media_and_negative_cases(self):host_contract(read(HOST))
@@ -251,13 +335,11 @@ class MP08B3Contracts(unittest.TestCase):
    (kvm_bootstrap_contract,w.replace('test -r /dev/kvm && test -w /dev/kvm || {','echo no-permission-gate',1)),
    (kvm_bootstrap_contract,w.replace('exit 1','echo continued',1)),
    (kvm_bootstrap_contract,w.replace('Enable runner KVM for real API36 instrumentation','KVM stage removed',1)),
-   (api36_execution_contract,w.replace("bash -euo pipefail <<'MP08B3_API36_BASH'",'set -euo pipefail',1)),
-   (api36_execution_contract,w.replace('MP08B3_API36_FOUR_REAL_INSTRUMENTATION_TESTS_PASS','forged green',1)),
-   (api36_execution_contract,w.replace('len(names) != 4','len(names) < 1',1)),
-   (api36_execution_contract,w.replace('set(names) != expected','False',1)),
-   (api36_execution_contract,w.replace("('failure','error','skipped')","('failure',)",1)),
-   (api36_execution_contract,w.replace('rm -rf app/build/outputs/androidTest-results/connected','echo stale-allowed',1)),
-   (api36_execution_contract,w.replace(':app:connectedDebugAndroidTest',':app:compileDebugAndroidTestKotlin',1)),
+   (api36_execution_contract,w.replace('script: python3 -B scripts/test_xgo_mp08b3_source_contract.py --api36-execute','script: echo bypass',1)),
+   (api36_execution_contract,w.replace('script: python3 -B scripts/test_xgo_mp08b3_source_contract.py --api36-execute','script: |\n            set -euo pipefail',1)),
+   (api36_execution_contract,w.replace("MP08B3_OPTED_IN: ${{ (github.event_name == 'workflow_dispatch' && inputs.x86_64_media_test == true) ||", "MP08B3_OPTED_IN: true",1)),
+   (api36_execution_contract,w.replace('MP08B3_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || inputs.exact_head_sha }}','MP08B3_EXPECTED_HEAD: none',1)),
+   (api36_execution_contract,w.replace('arch: x86_64','arch: arm64-v8a',1)),
    (workflow_contract,w.replace('test "$EMULATOR" = success','echo emulator-result',1)),
    (workflow_contract,w.replace(':app:compileDebugAndroidTestKotlin',':app:compileDebugKotlin',1)),
    (workflow_contract,w.replace('sudo apt-get update -qq','echo unpinned-media',1)),
@@ -271,4 +353,15 @@ class MP08B3Contracts(unittest.TestCase):
   for idx,(fn,bad) in enumerate(candidates):
    with self.subTest(index=idx),self.assertRaises(AssertionError):fn(bad)
 
-if __name__=='__main__':unittest.main(verbosity=2)
+if __name__=='__main__':
+ import sys
+ if sys.argv[1:]==['--api36-execute']:
+  try:run_api36_acceptance()
+  except Exception as exc:
+   # Never print environment, authorization headers, or signed media URLs.
+   print('MP08B3_API36_REFUSED: '+str(exc),file=sys.stderr,flush=True)
+   raise SystemExit(1)
+ elif len(sys.argv)!=1:
+  raise SystemExit('MP08B3_API36_REFUSED: unknown or multiple execution flags')
+ else:unittest.main(verbosity=2)
+
