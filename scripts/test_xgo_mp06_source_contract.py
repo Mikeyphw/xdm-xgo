@@ -47,6 +47,16 @@ class MP06SourceContract(unittest.TestCase):
   for i in range(1,15):self.assertRegex(src,rf'func TestMP06HLS{i:02d}[A-Za-z_0-9]*\(')
   for a in ('ReadVerified(rec.Identity)','ErrHLSVODIncomplete','ExplicitGapReportsPartial','AES128EncryptedInitMapDecryptedAndStored','MissingDurableAudioStoreFailClosedPreflight'):
    self.assertIn(a,src,a)
+ def test_inherited_mp05_audit_requires_exact_kotlin_fallback_diff(self):
+  inherited=read('scripts/test_xgo_mp05_staleness_audit.py')
+  self.assertIn('def test_kotlin_hls_fallback_preserved_except_mp06_gap_gate',inherited)
+  self.assertIn('staged.count(new_valid)',inherited)
+  self.assertIn('staged.count(new_reason)',inherited)
+  self.assertIn('self.assertEqual(reconstructed,original',inherited)
+  self.assertNotIn('def test_kotlin_hls_fallback_untouched(self)',inherited)
+  extended=read('scripts/test_xgo_mp06_staleness_audit.py')
+  self.assertIn('test_original_kotlin_hls_executor_remains_except_exact_mp06_gap_gate',extended)
+  self.assertIn('now.replace(new_valid,old_valid,1).replace(new_reason,old_reason,1)',extended)
  def test_ci05_runs_mp06_and_compiles_media_module(self):
   policy=read('scripts/ci/xgo_ci_policy.py')
   for a in ('MP06_PYTHON = [','tests.update(MP06_PYTHON)',

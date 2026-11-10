@@ -11,9 +11,26 @@ class MP05Stale(unittest.TestCase):
  def test_original_ffmpeg_broker_unchanged(self):
   p='app/XDM.Android/app/src/main/kotlin/com/mikeyphw/xdm/android/engine/AndroidMediaPlatformBroker.kt'
   self.assertEqual((ROOT/p).read_bytes(),self.baseline(p))
- def test_kotlin_hls_fallback_untouched(self):
+ def test_kotlin_hls_fallback_preserved_except_mp06_gap_gate(self):
+  # MP06 adds only two completion-verifier lines: the explicit GAP predicate
+  # and its failure reason. Every other byte of the original Kotlin HLS
+  # executor, including normal download/fallback behavior, remains immutable.
   p='app/XDM.Android/media/src/main/kotlin/com/mikeyphw/xdm/android/media/NativeHlsExecutionEngine.kt'
-  self.assertEqual((ROOT/p).read_bytes(),self.baseline(p))
+  original=self.baseline(p).decode('utf-8')
+  staged=(ROOT/p).read_text(encoding='utf-8')
+  old_valid='val valid = artifactBytes.size >= expectedMin && !containsManifest && !html && plan.nativeExecutable && hashMatches'
+  new_valid=('// An explicit EXT-X-GAP is an intentional hole, not a downloaded part.\n'
+             '        // MP08 owns the separate, explicitly partial salvage operation.\n'
+             '        val hasExplicitGaps = plan.parts.any { it.gap }\n'
+             '        val valid = artifactBytes.size >= expectedMin && !containsManifest && !html && plan.nativeExecutable && hashMatches && !hasExplicitGaps')
+  old_reason='            !plan.nativeExecutable -> "Native HLS plan was not executable; completion rejected."'
+  new_reason=old_reason+'\n            hasExplicitGaps -> "Explicit HLS gaps require partial recovery, not Completed."'
+  self.assertEqual(original.count(old_valid),1)
+  self.assertEqual(original.count(old_reason),1)
+  self.assertEqual(staged.count(new_valid),1)
+  self.assertEqual(staged.count(new_reason),1)
+  reconstructed=staged.replace(new_valid,old_valid,1).replace(new_reason,old_reason,1)
+  self.assertEqual(reconstructed,original,'Only the MP06 explicit gap gate may differ from the original fallback')
  def test_historical_xpi_sha_unchanged(self):
   p='docs/xgo/XGO_XPI_V161_REFERENCE_DIGESTS.json'
   self.assertEqual((ROOT/p).read_bytes(),self.baseline(p))
