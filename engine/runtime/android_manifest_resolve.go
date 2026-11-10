@@ -24,6 +24,8 @@ const mp03AndroidMaximumBody = 2 << 20
 type androidManifestResolveInput struct {
     ClientRequestID string `json:"client_request_id"`
     CaptureID string `json:"capture_id"`
+    Selection *media.ManifestSelectionInputV1 `json:"selection,omitempty"`
+    ExpectedRevision string `json:"expected_revision,omitempty"`
 }
 type androidManifestFetchWire struct {
     BodyBase64 string `json:"body_base64"`
@@ -112,12 +114,23 @@ func (e *Engine) androidMediaResolveHandler(ctx context.Context, inv *Invocation
     if graph.SchemaVersion != media.ManifestGraphSchemaV1 || graph.DownloadReady {
         return failed("manifest_schema_invalid")
     }
+    revision, err := media.ManifestGraphRevision(graph)
+    if err != nil { return failed("manifest_revision_invalid") }
+    if input.ExpectedRevision != "" && input.ExpectedRevision != revision {
+        return failed("manifest_changed_refresh_required")
+    }
+    var plan *media.ManifestSelectionPlanV1
+    request := media.ManifestSelectionInputV1{}
+    if input.Selection != nil { request = *input.Selection }
+    candidate, selectionErr := media.SelectManifestGraph(graph, request)
+    if selectionErr != nil && input.Selection != nil { return failed("selection_incompatible_or_stale") }
+    if selectionErr == nil { plan = &candidate }
     // Telemetry is volatile, not durable: transport URLs exist solely in the
     // in-memory app review result. The UI decoder never logs them.
     result, err := json.Marshal(map[string]any{
         "client_request_id": input.ClientRequestID, "action": "resolve_manifest",
         "capture_id": input.CaptureID, "ok": true, "status": "resolved_read_only",
-        "manifest_graph": graph,
+        "manifest_graph": graph, "manifest_revision": revision, "manifest_selection_plan": plan,
     })
     if err != nil { return failed("manifest_encoding_failed") }
     _, err = inv.Emit(event.Telemetry, "android.media.command_result", result, "")

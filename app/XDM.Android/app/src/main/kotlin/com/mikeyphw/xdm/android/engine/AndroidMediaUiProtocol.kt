@@ -33,6 +33,8 @@ data class AndroidMediaUiCommandResult(
     val message: String? = null,
     /** Transient only. Never saved, logged, or put in navigation state. */
     val manifestGraph: ManifestGraphV1Contract.Graph? = null,
+    val manifestRevision: String? = null,
+    val manifestSelectionPlan: ManifestSelectionV1Contract.Plan? = null,
 )
 
 internal object AndroidMediaUiWire {
@@ -88,9 +90,20 @@ internal object AndroidMediaUiWire {
         .put("client_request_id", requestId)
         .put("capture_id", captureId)
 
-    fun resolvePayload(requestId: String, captureId: String): JSONObject = JSONObject()
+    fun resolvePayload(
+        requestId: String, captureId: String,
+        selection: ManifestSelectionV1Contract.Request? = null,
+        expectedRevision: String? = null,
+    ): JSONObject = JSONObject()
         .put("client_request_id", requestId)
         .put("capture_id", captureId)
+        .apply {
+            if (selection != null) put("selection", selection.wire())
+            if (expectedRevision != null) {
+                require(Regex("[0-9a-f]{64}").matches(expectedRevision)) { "MP04 invalid graph revision" }
+                put("expected_revision", expectedRevision)
+            }
+        }
 
     fun projection(payload: JSONObject): AndroidMediaUiProjection {
         val captures = payload.optJSONArray("captures") ?: JSONArray()
@@ -128,6 +141,8 @@ internal object AndroidMediaUiWire {
         errorCode = payload.nullableString("error_code"),
         message = payload.nullableString("message"),
         manifestGraph = payload.optJSONObject("manifest_graph")?.let(ManifestGraphV1Contract::decode),
+        manifestRevision = payload.optString("manifest_revision").takeIf { Regex("[0-9a-f]{64}").matches(it) },
+        manifestSelectionPlan = payload.optJSONObject("manifest_selection_plan")?.let(ManifestSelectionV1Contract::decode),
     )
 
     fun captureJson(record: MediaCaptureRecord): JSONObject = JSONObject()
