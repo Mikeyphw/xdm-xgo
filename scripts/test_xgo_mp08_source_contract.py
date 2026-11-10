@@ -72,4 +72,44 @@ class MP08SourceContracts(unittest.TestCase):
   d=load('docs/xgo/MP08A_VERIFIED_PUBLICATION_CORE_ACCEPTANCE.md')
   for a in ('not Android MediaStore qualified','MP08B','DownloadReady','FFprobe','ReadPublished','partial'):
    self.assertIn(a,d)
+ def test_mp08b1_private_android_broker_is_scoped_and_verified(self):
+  s=load('app/XDM.Android/app/src/main/kotlin/com/mikeyphw/xdm/android/engine/AndroidMP08VerifiedStageBroker.kt')
+  for a in ('MediaRequestHandoffStore.forCapture(capture)', 'handoff.expiresAtEpochMs',
+            'mp05Journal.isFile', 'fragmentID.matches(id)', 'shaID.matches(hash)',
+            'original.optString("hash") == hash', 'copiedHash == hash',
+            'Files.isSymbolicLink(file.toPath())', 'file.canonicalFile.parentFile == mp05Parts.canonicalFile',
+            'processor.finalizeNativeHls(', 'processor.muxTracks(', 'processor.remux(',
+            'finalResult.verification?.valid != true', 'Os.rename(stageFile.absolutePath, target.absolutePath)',
+            'syncDirectory(verified)', 'hashFile(target) != hashBefore',
+            'output.fd.sync()', 'out.fd.sync()', 'download_ready", false',
+            'media_store_published", false', 'journalTarget.isFile'):
+   self.assertIn(a,s,a)
+  for forbidden in ('Runtime.getRuntime()', 'ProcessBuilder(', 'exec.Command(', 'ContentResolver.insert(',
+                    'optString("output_path")', 'optString("url")', 'optString("argv")', 'download_ready", true'):
+   self.assertNotIn(forbidden,s,forbidden)
+ def test_mp08b1_rejects_unsupported_partial_dynamic_and_multi_period(self):
+  s=load('app/XDM.Android/app/src/main/kotlin/com/mikeyphw/xdm/android/engine/AndroidMP08VerifiedStageBroker.kt')
+  for a in ('request.optBoolean("partial")','request.optBoolean("has_gaps")',
+            'request.optBoolean("is_dynamic")','request.optInt("period_count", -1) != 1',
+            'request.optBoolean("require_subtitle")', 'request.optString("container") != "mp4"',
+            'inputTracks.length() !in 1..2', 'kinds.distinct().size != kinds.size',
+            'seen.add(unique)', 'item.optInt("index", -1) != partIndex',
+            'safeAdd(admittedBytes, copyVerified(', 'if (target.exists() || journalTarget.exists())'):
+   self.assertIn(a,s,a)
+ def test_mp08b1_dispatcher_runs_async_and_rejects_ready_true(self):
+  dispatcher=load('app/XDM.Android/app/src/main/kotlin/com/mikeyphw/xdm/android/engine/AndroidPlatformRequestDispatcher.kt')
+  authority=load('app/XDM.Android/app/src/main/kotlin/com/mikeyphw/xdm/android/engine/AndroidEngineProcessAuthority.kt')
+  for a in ('if (request.optString("kind") == "mp08_finalization")', 'mediaToolScope.launch {',
+            'mp08FinalizationReply(requestId, session, payload)', '!result.optBoolean("download_ready", true)',
+            'mp08Broker.execute(payload)'):
+   self.assertIn(a,dispatcher,a)
+  self.assertIn('AndroidMP08VerifiedStageBroker(',authority)
+  self.assertIn('EmbeddedFfmpegRuntime(appContext)',authority)
+  self.assertNotIn('mp08Broker.execute(payload)',authority)
+ def test_mp08b1_integrates_without_weakening_old_contracts(self):
+  policy=load('scripts/ci/xgo_ci_policy.py')
+  self.assertIn('tests.update(MP08_PYTHON)',policy)
+  self.assertIn('"app/XDM.Android/app/src/"',policy)
+  self.assertIn('test_mp08b1_private_android_broker_is_scoped_and_verified',load('scripts/test_xgo_mp08_source_contract.py'))
+  self.assertIn('not DownloadReady',load('docs/xgo/MP08B1_ANDROID_VERIFIED_STAGE_ACCEPTANCE.md'))
 if __name__=='__main__':unittest.main(verbosity=2)
