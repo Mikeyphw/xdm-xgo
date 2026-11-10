@@ -73,6 +73,12 @@ MODERN_SOURCE_TESTS = [
     "app/XDM/eng/validate-xfe01-single-firefox-extension.py",
     "app/XDM/eng/rem18-release-matrix-audit.py",
 ]
+MP03_PYTHON = [
+    "scripts/test_xgo_mp03_source_contract.py",
+    "scripts/test_xgo_mp03_staleness_contract.py",
+    "scripts/test_xgo_mp03_android_e2e_contract.py",
+    "scripts/test_xgo_mp03_android_staleness.py",
+]
 POLICY_TESTS = [
     "scripts/ci/test_xgo_ci_policy.py",
     "scripts/test_xgo_mp01_hf04_ci_tiers.py",
@@ -82,7 +88,7 @@ POLICY_TESTS = [
 # is never permission to release/publish or to omit ARM64 physical acceptance.
 RISK_PREFIXES = (
     ".github/workflows/", "scripts/ci/", ".devtool.toml",
-    "app/XDM.Android/app/build.gradle.kts", "app/XDM.Android/gradle/",
+    "app/XDM.Android/build.gradle.kts", "app/XDM.Android/app/build.gradle.kts", "app/XDM.Android/gradle/",
     "app/XDM.Android/browser-extension/src/main/extension/xdm-firefox/handoff.js",
     "app/XDM.Android/app/src/main/kotlin/com/mikeyphw/xdm/android/BrowserCaptureEnvelopeManager.kt",
     "app/XDM.Android/browser-integration/src/main/kotlin/",
@@ -147,6 +153,8 @@ def classify(paths: list[str]) -> dict:
     if groups & {"extension", "media", "ci"}:
         tests.update(EXTENSION_TESTS)
         tests.update(EXTENSION_PYTHON)
+    if groups & {"go", "android", "ci"}:
+        tests.update(MP03_PYTHON)
     if groups & {"android", "ci"}:
         tests.update(ANDROID_SOURCE_TESTS)
         tests.add("app/XDM.Android/tools/validate-xar10-browser-capture-evidence.py")
@@ -156,7 +164,7 @@ def classify(paths: list[str]) -> dict:
         "groups": sorted(groups) if groups else ["docs"],
         "tests": sorted(tests),
         "needs_android_compile": any(p.startswith(("app/XDM.Android/app/src/", "app/XDM.Android/browser-integration/src/",
-                                                      "app/XDM.Android/app/build.gradle", "app/XDM.Android/gradle/")) for p in paths),
+                                                      "app/XDM.Android/build.gradle", "app/XDM.Android/app/build.gradle", "app/XDM.Android/gradle/")) for p in paths),
         "needs_go": "go" in groups,
         "ci_sensitive": "ci" in groups,
         "high_risk": any(is_risk(p) for p in paths),

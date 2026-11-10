@@ -31,6 +31,8 @@ data class AndroidMediaUiCommandResult(
     val outputPath: String? = null,
     val errorCode: String? = null,
     val message: String? = null,
+    /** Transient only. Never saved, logged, or put in navigation state. */
+    val manifestGraph: ManifestGraphV1Contract.Graph? = null,
 )
 
 internal object AndroidMediaUiWire {
@@ -86,6 +88,10 @@ internal object AndroidMediaUiWire {
         .put("client_request_id", requestId)
         .put("capture_id", captureId)
 
+    fun resolvePayload(requestId: String, captureId: String): JSONObject = JSONObject()
+        .put("client_request_id", requestId)
+        .put("capture_id", captureId)
+
     fun projection(payload: JSONObject): AndroidMediaUiProjection {
         val captures = payload.optJSONArray("captures") ?: JSONArray()
         val variants = payload.optJSONArray("variants") ?: JSONArray()
@@ -121,6 +127,7 @@ internal object AndroidMediaUiWire {
         outputPath = payload.nullableString("output_path"),
         errorCode = payload.nullableString("error_code"),
         message = payload.nullableString("message"),
+        manifestGraph = payload.optJSONObject("manifest_graph")?.let(ManifestGraphV1Contract::decode),
     )
 
     fun captureJson(record: MediaCaptureRecord): JSONObject = JSONObject()

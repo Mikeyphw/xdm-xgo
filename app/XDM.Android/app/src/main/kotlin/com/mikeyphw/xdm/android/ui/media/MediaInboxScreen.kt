@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
 import androidx.compose.material3.OutlinedTextField
@@ -23,12 +24,15 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
+import com.mikeyphw.xdm.android.engine.AndroidMediaUiClient
+import com.mikeyphw.xdm.android.engine.AndroidMediaUiCommandResult
 import com.mikeyphw.xdm.android.media.MediaBatchInputParser
 import com.mikeyphw.xdm.android.media.MediaBatchUrlDisposition
 import com.mikeyphw.xdm.android.media.MediaConsumerWorkspacePlanner
@@ -46,6 +50,7 @@ import com.mikeyphw.xdm.android.model.MediaVariant
 import com.mikeyphw.xdm.android.model.MediaVariantKind
 import com.mikeyphw.xdm.android.util.formatBytes
 import com.mikeyphw.xdm.android.util.formatSpeed
+import kotlinx.coroutines.launch
 
 @Composable
 @UiSurface(UiAudience.User, "Review captured media and choose downloadable tracks")
@@ -73,6 +78,22 @@ fun MediaInboxScreen(
 ) {
     val consumerPlanner = remember { MediaConsumerWorkspacePlanner() }
     val context = LocalContext.current
+    val goManifestClient = remember(context.applicationContext) { AndroidMediaUiClient(context.applicationContext) }
+    val inspectScope = rememberCoroutineScope()
+    var inspectingManifest by remember { mutableStateOf<String?>(null) }
+    var manifestReview by remember { mutableStateOf<AndroidMediaUiCommandResult?>(null) }
+    val onInspectGoManifest: (MediaCaptureRecord) -> Unit = { capture ->
+        if (inspectingManifest == null) {
+            inspectingManifest = capture.id
+            manifestReview = null
+            inspectScope.launch {
+                manifestReview = runCatching { goManifestClient.resolveManifest(capture.id) }
+                    .getOrElse { AndroidMediaUiCommandResult("", "resolve_manifest", false,
+                        errorCode = "manifest_inspection_unavailable") }
+                inspectingManifest = null
+            }
+        }
+    }
     var batchText by rememberSaveable { mutableStateOf("") }
     var batchFeedback by remember { mutableStateOf<String?>(null) }
     var pageUrlText by rememberSaveable { mutableStateOf("") }
@@ -250,6 +271,7 @@ fun MediaInboxScreen(
                                 onOpenOutput = { output -> openMediaOutput(context, output) },
                                 onCancelEmbeddedFfmpeg = onCancelEmbeddedFfmpeg,
                                 onResolve = onResolve,
+                                onInspectManifest = onInspectGoManifest,
                                 onSelectVariant = onSelectVariant,
                                 onTrackSelectionChanged = onTrackSelectionChanged,
                                 onRemove = onRemove,
@@ -274,6 +296,7 @@ fun MediaInboxScreen(
                             onOpenOutput = { output -> openMediaOutput(context, output) },
                             onCancelEmbeddedFfmpeg = onCancelEmbeddedFfmpeg,
                             onResolve = onResolve,
+                            onInspectManifest = onInspectGoManifest,
                             onSelectVariant = onSelectVariant,
                             onTrackSelectionChanged = onTrackSelectionChanged,
                             onRemove = onRemove,
@@ -303,6 +326,49 @@ fun MediaInboxScreen(
             }
         }
     }
+    manifestReview?.let { result ->
+        Mp03ManifestReviewDialog(result) { manifestReview = null }
+    }
+    if (inspectingManifest != null) {
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Inspecting manifest") },
+            text = { Text("Resolving HLS/DASH qualities and tracks with the authorized Android session…") },
+            confirmButton = {},
+        )
+    }
+}
+
+@Composable
+private fun Mp03ManifestReviewDialog(result: AndroidMediaUiCommandResult, onClose: () -> Unit) {
+    val graph = result.manifestGraph
+    AlertDialog(
+        onDismissRequest = onClose,
+        title = { Text("Go manifest inspection") },
+        text = {
+            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (graph == null) {
+                    Text("Could not inspect this capture: ${result.errorCode ?: "manifest_unavailable"}.")
+                    Text("Refresh the signed browser session, or use the existing resolver.")
+                } else {
+                    Text("${graph.protocol.uppercase()} • ${graph.kind.uppercase()} • ${graph.periods.size} periods")
+                    Text("${graph.qualities.size} video qualities • ${graph.audioTracks.size} audio • ${graph.subtitleTracks.size} subtitles")
+                    graph.qualities.take(6).forEach { quality ->
+                        Text("${quality.width}×${quality.height} • ${quality.bandwidth / 1000} kb/s • ${quality.codecs.joinToString().take(60)}")
+                    }
+                    graph.audioTracks.take(4).forEach { track ->
+                        Text("Audio: ${track.language.ifBlank { "Unknown" }} • ${track.name.take(48)}")
+                    }
+                    graph.subtitleTracks.take(4).forEach { track ->
+                        Text("Subtitles: ${track.language.ifBlank { "Unknown" }} • ${track.name.take(48)}")
+                    }
+                    if (graph.protectedMedia) Text("DRM protected: diagnostic only.")
+                    Text("Discovery only — Kotlin HLS remains the download fallback until MP04/MP05 qualify.")
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onClose) { Text("Close") } },
+    )
 }
 
 @Composable

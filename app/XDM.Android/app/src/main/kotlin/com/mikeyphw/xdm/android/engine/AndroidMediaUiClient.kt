@@ -77,6 +77,13 @@ class AndroidMediaUiClient(private val context: Context) {
         return submit("android.media.execute", requestId, "execute", AndroidMediaUiWire.executePayload(requestId, captureId))
     }
 
+    /** Read-only Go HLS/DASH discovery; the existing Kotlin executor remains authoritative. */
+    suspend fun resolveManifest(captureId: String): AndroidMediaUiCommandResult {
+        val requestId = "media-${UUID.randomUUID()}"
+        return submit("android.media.resolve_manifest", requestId, "resolve_manifest",
+            AndroidMediaUiWire.resolvePayload(requestId, captureId))
+    }
+
     private suspend fun submit(kind: String, requestId: String, action: String, payload: org.json.JSONObject): AndroidMediaUiCommandResult {
         var current = service
         if (current == null) {
