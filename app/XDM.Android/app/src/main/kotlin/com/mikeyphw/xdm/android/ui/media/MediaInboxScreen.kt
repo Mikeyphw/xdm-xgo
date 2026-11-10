@@ -10,12 +10,14 @@ import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -33,6 +35,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.mikeyphw.xdm.android.engine.AndroidMediaUiClient
 import com.mikeyphw.xdm.android.engine.AndroidMediaUiCommandResult
+import com.mikeyphw.xdm.android.engine.ManifestSelectionV1Contract
 import com.mikeyphw.xdm.android.media.MediaBatchInputParser
 import com.mikeyphw.xdm.android.media.MediaBatchUrlDisposition
 import com.mikeyphw.xdm.android.media.MediaConsumerWorkspacePlanner
@@ -82,10 +85,12 @@ fun MediaInboxScreen(
     val inspectScope = rememberCoroutineScope()
     var inspectingManifest by remember { mutableStateOf<String?>(null) }
     var manifestReview by remember { mutableStateOf<AndroidMediaUiCommandResult?>(null) }
+    var manifestChoice by remember { mutableStateOf(ManifestSelectionV1Contract.Request()) }
     val onInspectGoManifest: (MediaCaptureRecord) -> Unit = { capture ->
         if (inspectingManifest == null) {
             inspectingManifest = capture.id
             manifestReview = null
+            manifestChoice = ManifestSelectionV1Contract.Request()
             inspectScope.launch {
                 manifestReview = runCatching { goManifestClient.resolveManifest(capture.id) }
                     .getOrElse { AndroidMediaUiCommandResult("", "resolve_manifest", false,
@@ -327,7 +332,31 @@ fun MediaInboxScreen(
         }
     }
     manifestReview?.let { result ->
-        Mp03ManifestReviewDialog(result) { manifestReview = null }
+        Mp03ManifestReviewDialog(
+            result = result,
+            selection = manifestChoice,
+            onSelectionChange = { next ->
+                manifestChoice = next
+                // Any user change invalidates the previous Go plan before resubmission.
+                manifestReview = manifestReview?.copy(manifestSelectionPlan = null)
+            },
+            onVerify = {
+                val captureId = manifestReview?.captureId
+                val revision = manifestReview?.manifestRevision
+                if (captureId != null && revision != null && inspectingManifest == null) {
+                    inspectingManifest = captureId
+                    manifestReview = null
+                    inspectScope.launch {
+                        manifestReview = runCatching {
+                            goManifestClient.resolveManifest(captureId, manifestChoice, revision)
+                        }.getOrElse { AndroidMediaUiCommandResult("", "resolve_manifest", false,
+                            errorCode = "selection_inspection_unavailable") }
+                        inspectingManifest = null
+                    }
+                }
+            },
+            onClose = { manifestReview = null },
+        )
     }
     if (inspectingManifest != null) {
         AlertDialog(
@@ -340,34 +369,94 @@ fun MediaInboxScreen(
 }
 
 @Composable
-private fun Mp03ManifestReviewDialog(result: AndroidMediaUiCommandResult, onClose: () -> Unit) {
+private fun Mp03ManifestReviewDialog(
+    result: AndroidMediaUiCommandResult,
+    selection: ManifestSelectionV1Contract.Request,
+    onSelectionChange: (ManifestSelectionV1Contract.Request) -> Unit,
+    onVerify: () -> Unit,
+    onClose: () -> Unit,
+) {
     val graph = result.manifestGraph
+    val plan = result.manifestSelectionPlan
     AlertDialog(
         onDismissRequest = onClose,
-        title = { Text("Go manifest inspection") },
+        title = { Text("Manifest tracks & output review") },
         text = {
-            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            LazyColumn(
+                modifier = Modifier.heightIn(max = 460.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
                 if (graph == null) {
-                    Text("Could not inspect this capture: ${result.errorCode ?: "manifest_unavailable"}.")
-                    Text("Refresh the signed browser session, or use the existing resolver.")
+                    item { Text("Inspection unavailable: ${result.errorCode ?: "manifest_unavailable"}. Refresh the browser session and try again.") }
                 } else {
-                    Text("${graph.protocol.uppercase()} • ${graph.kind.uppercase()} • ${graph.periods.size} periods")
-                    Text("${graph.qualities.size} video qualities • ${graph.audioTracks.size} audio • ${graph.subtitleTracks.size} subtitles")
-                    graph.qualities.take(6).forEach { quality ->
-                        Text("${quality.width}×${quality.height} • ${quality.bandwidth / 1000} kb/s • ${quality.codecs.joinToString().take(60)}")
+                    item { Text("${graph.protocol.uppercase()} • ${graph.kind.uppercase()} • ${graph.periods.size} timeline groups") }
+                    item { Text("${graph.qualities.size} qualities • ${graph.audioTracks.size} audio • ${graph.subtitleTracks.size} subtitles") }
+                    if (graph.protectedMedia) item { Text("Protected media: diagnostic only. DRM is never bypassed.") }
+                    item { Text("Download intent") }
+                    item {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            for (pair in listOf("best_video" to "Video + audio", "video_only" to "Video only", "audio_only" to "Audio only")) {
+                                FilterChip(selected = selection.intent == pair.first,
+                                    onClick = { onSelectionChange(selection.copy(intent = pair.first, videoId = if (pair.first == "audio_only") null else selection.videoId, audioId = if (pair.first == "video_only") null else selection.audioId)) },
+                                    label = { Text(pair.second) })
+                            }
+                        }
                     }
-                    graph.audioTracks.take(4).forEach { track ->
-                        Text("Audio: ${track.language.ifBlank { "Unknown" }} • ${track.name.take(48)}")
+                    if (selection.intent != "audio_only") {
+                        item { Text("Video quality") }
+                        items(graph.qualities, key = { "video:${it.id}" }) { quality ->
+                            FilterChip(
+                                selected = selection.videoId == quality.id || (selection.videoId == null && plan?.videoId == quality.id),
+                                onClick = { onSelectionChange(selection.copy(videoId = quality.id, audioId = null, subtitleId = null)) },
+                                label = { Text("${quality.width}×${quality.height} • ${quality.bandwidth / 1000} kb/s • ${quality.codecs.joinToString().take(44)}") },
+                            )
+                        }
                     }
-                    graph.subtitleTracks.take(4).forEach { track ->
-                        Text("Subtitles: ${track.language.ifBlank { "Unknown" }} • ${track.name.take(48)}")
+                    if (selection.intent != "video_only") {
+                        item { Text("Audio (same rendition group required)") }
+                        items(graph.audioTracks, key = { "audio:${it.id}" }) { track ->
+                            FilterChip(selected = selection.audioId == track.id || (selection.audioId == null && plan?.audioId == track.id),
+                                onClick = { onSelectionChange(selection.copy(audioId = track.id)) },
+                                label = { Text("${track.language.ifBlank { "Unknown" }} • ${if (track.default) "Default" else "Alternate"}") })
+                        }
                     }
-                    if (graph.protectedMedia) Text("DRM protected: diagnostic only.")
-                    Text("Discovery only — Kotlin HLS remains the download fallback until MP04/MP05 qualify.")
+                    item {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            FilterChip(selected = selection.subtitlePolicy == "optional", onClick = { onSelectionChange(selection.copy(subtitlePolicy = "optional", subtitleId = null)) }, label = { Text("Subtitles off") })
+                            FilterChip(selected = selection.subtitlePolicy == "required", onClick = { onSelectionChange(selection.copy(subtitlePolicy = "required")) }, label = { Text("Require subtitles") })
+                        }
+                    }
+                    if (selection.subtitlePolicy == "required") {
+                        items(graph.subtitleTracks, key = { "subtitle:${it.id}" }) { track ->
+                            FilterChip(selected = selection.subtitleId == track.id || (selection.subtitleId == null && plan?.subtitleId == track.id),
+                                onClick = { onSelectionChange(selection.copy(subtitleId = track.id)) },
+                                label = { Text("Subtitles • ${track.language.ifBlank { "Unknown" }}") })
+                        }
+                    }
+                    item { Text("Output container") }
+                    item {
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            for (c in listOf("auto", "mp4", "mkv", "webm")) {
+                                FilterChip(selected = selection.container == c,
+                                    onClick = { onSelectionChange(selection.copy(container = c)) },
+                                    label = { Text(c.uppercase()) })
+                            }
+                        }
+                    }
+                    if (plan == null) {
+                        item { Text("Not verified yet. Re-check exact IDs and signed manifest revision with Go.") }
+                    } else {
+                        item { Text("Go plan: ${plan.intent} • ${plan.container.uppercase()} • ${plan.status}") }
+                        item { Text("Required streams: video=${plan.required.video}, audio=${plan.required.audio}, subtitles=${plan.required.subtitle}") }
+                        if (plan.required.verifyEmbeddedAudio) item { Text("Audio presence is unproven; final FFprobe audio verification is mandatory.") }
+                        if (plan.required.verifyEveryPeriod) item { Text("All DASH periods must be verified before publication.") }
+                        item { Text("Plan only — not queued, not downloaded, not Complete. Kotlin HLS fallback remains available.") }
+                    }
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onClose) { Text("Close") } },
+        confirmButton = { TextButton(onClick = onVerify, enabled = graph != null && !graph.protectedMedia) { Text("Verify selection") } },
+        dismissButton = { TextButton(onClick = onClose) { Text("Close") } },
     )
 }
 
