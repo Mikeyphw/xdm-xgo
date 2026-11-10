@@ -2,7 +2,7 @@
 name: XGO MP08B3 Real Media Acceptance
 on:
   pull_request:
-    types: [opened, reopened, synchronize, ready_for_review]
+    types: [opened, reopened, synchronize, ready_for_review, labeled]
   workflow_dispatch:
     inputs:
       exact_head_sha:
@@ -99,26 +99,42 @@ jobs:
           retention-days: 14
   api36-real-android:
     name: API36 real MediaStore and embedded runtime (opt-in only)
-    if: github.event_name == 'workflow_dispatch' && inputs.x86_64_media_test == true
+    # New workflows are not workflow_dispatch-addressable before default-branch
+    # adoption. A repository maintainer can opt in on this PR via a label event.
+    # Fork PRs cannot request an Android instrumentation run through the label.
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.x86_64_media_test == true) ||
+      (github.event_name == 'pull_request' && github.event.action == 'labeled' &&
+       github.event.label.name == 'xgo-mp08b3-api36' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
     needs: [source-and-real-media]
     runs-on: ubuntu-24.04
     timeout-minutes: 70
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
-          ref: ${{ inputs.exact_head_sha }}
+          ref: ${{ github.event.pull_request.head.sha || inputs.exact_head_sha }}
           fetch-depth: 0
           persist-credentials: false
       - name: Refuse missing exact SHA, wrong host or KVM
         shell: bash
         env:
-          EXPECTED: ${{ inputs.exact_head_sha }}
+          EXPECTED: ${{ github.event.pull_request.head.sha || inputs.exact_head_sha }}
           BRANCH_SHA: ${{ github.sha }}
+          IS_MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPOSITORY: ${{ github.repository }}
+          IS_LABEL_EVENT: ${{ github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'xgo-mp08b3-api36' }}
         run: |
           set -euo pipefail
           [[ "$EXPECTED" =~ ^[0-9a-f]{40}$ ]]
-          test "$EXPECTED" = "$BRANCH_SHA"
           test "$(git rev-parse HEAD)" = "$EXPECTED"
+          if [[ "$IS_MANUAL" == true ]]; then
+            test "$EXPECTED" = "$BRANCH_SHA"
+          else
+            test "$IS_LABEL_EVENT" = true
+            test "$PR_HEAD_REPO" = "$REPOSITORY"
+          fi
           test "$(uname -m)" = x86_64
           test -r /dev/kvm && test -w /dev/kvm
       - uses: actions/setup-java@v4
@@ -153,8 +169,12 @@ jobs:
             ./gradlew --no-daemon --max-workers=2 :app:connectedDebugAndroidTest \
               -Pandroid.testInstrumentationRunnerArguments.class=com.mikeyphw.xdm.android.MP08B3MediaStoreAcceptanceInstrumentedTest
   manual-qualification:
-    name: Manual emulator gate — never green when skipped
-    if: always() && github.event_name == 'workflow_dispatch'
+    name: Explicit opt-in emulator gate — never green when skipped
+    if: >-
+      always() && ((github.event_name == 'workflow_dispatch') ||
+      (github.event_name == 'pull_request' && github.event.action == 'labeled' &&
+       github.event.label.name == 'xgo-mp08b3-api36' &&
+       github.event.pull_request.head.repo.full_name == github.repository))
     needs: [source-and-real-media, api36-real-android]
     runs-on: ubuntu-24.04
     timeout-minutes: 3
@@ -162,7 +182,10 @@ jobs:
       - name: Require affirmative real-device result
         shell: bash
         env:
-          OPTED_IN: ${{ inputs.x86_64_media_test }}
+          OPTED_IN: ${{ (github.event_name == 'workflow_dispatch' && inputs.x86_64_media_test == true) ||
+            (github.event_name == 'pull_request' && github.event.action == 'labeled' &&
+             github.event.label.name == 'xgo-mp08b3-api36' &&
+             github.event.pull_request.head.repo.full_name == github.repository) }}
           SOURCE: ${{ needs.source-and-real-media.result }}
           EMULATOR: ${{ needs.api36-real-android.result }}
         run: |

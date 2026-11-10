@@ -56,7 +56,22 @@ def workflow_contract(s):
      'scripts/test_xgo_mp08b3_source_contract.py',
      'test "$EMULATOR" = success',
      'test "$OPTED_IN" = true', 'test "$SOURCE" = success',
-     'if: always() && github.event_name == \'workflow_dispatch\''))
+     "github.event.action == 'labeled'",
+     "github.event.label.name == 'xgo-mp08b3-api36'",
+     'github.event.pull_request.head.repo.full_name == github.repository',
+     'github.event.pull_request.head.sha || inputs.exact_head_sha',
+     'test "$PR_HEAD_REPO" = "$REPOSITORY"',
+     'test "$IS_LABEL_EVENT" = true',
+     'types: [opened, reopened, synchronize, ready_for_review, labeled]',
+     'if: >-'))
+ # Both the emulator and final receipt must be gated by an explicit
+ # same-repository label, rather than silently activating on ordinary PR sync.
+ if s.count("github.event.label.name == 'xgo-mp08b3-api36'") < 4 or s.count('github.event.pull_request.head.repo.full_name == github.repository') < 3:
+  raise AssertionError('MP08B3_SOURCE_REFUSED: opt-in guard absent from a job')
+ if s.count('github.event.pull_request.head.sha || inputs.exact_head_sha') != 4:
+  raise AssertionError('MP08B3_SOURCE_REFUSED: explicit PR head SHA binding weakened')
+ if s.count('github.event_name == \'workflow_dispatch\'') < 3:
+  raise AssertionError('MP08B3_SOURCE_REFUSED: original manual trigger removed')
  if s.index('Install pinned Ubuntu 24.04 FFmpeg and FFprobe') > s.index('Run real FFmpeg with local video and audio sources'):
   raise AssertionError('MP08B3_SOURCE_REFUSED: FFmpeg setup must precede playback')
  if re.search(r'(?m)^\s*x86_64_media_test:\s*true\s*$',s) or 'default: true' in s:
@@ -95,6 +110,12 @@ class MP08B3Contracts(unittest.TestCase):
    (android_test_contract,a.replace('@Test\n    fun b3_03','@Ignore\n    @Test\n    fun b3_03',1)),
    (android_test_contract,a.replace('assertFalse("Android may never assert DownloadReady"','assertTrue("Android may never assert DownloadReady"',1)),
    (workflow_contract,w.replace('default: false','default: true',1)),
+   (workflow_contract,w.replace('ready_for_review, labeled','ready_for_review',1)),
+   (workflow_contract,w.replace('test "$PR_HEAD_REPO" = "$REPOSITORY"','echo skip-repo',1)),
+   (workflow_contract,w.replace('test "$IS_LABEL_EVENT" = true','echo skip-event',1)),
+   (workflow_contract,w.replace('github.event.pull_request.head.sha || inputs.exact_head_sha','inputs.exact_head_sha',1)),
+   (workflow_contract,w.replace("github.event.label.name == 'xgo-mp08b3-api36'",'true',1)),
+   (workflow_contract,w.replace('github.event.pull_request.head.repo.full_name == github.repository','true',1)),
    (workflow_contract,w.replace('test "$EMULATOR" = success','echo emulator-result',1)),
    (workflow_contract,w.replace(':app:compileDebugAndroidTestKotlin',':app:compileDebugKotlin',1)),
    (workflow_contract,w.replace('sudo apt-get update -qq','echo unpinned-media',1)),
