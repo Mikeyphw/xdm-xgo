@@ -329,6 +329,14 @@
 
     size(tabId) { this.trim(tabId); return (this.buckets.get(Number(tabId)) || new Map()).size; }
 
+    clearAll() {
+      // Revoke every tab's logical rows, aliases AND privileged request evidence
+      // when browser capture settings change. Return affected tabs for badge reset.
+      const tabs = [...new Set([...this.buckets.keys(), ...this.evidence.keys()])];
+      this.buckets.clear(); this.aliases.clear(); this.evidence.clear(); this.stats.clear();
+      return tabs;
+    }
+
     removeTab(tabId) {
       const key = Number(tabId);
       this.buckets.delete(key); this.aliases.delete(key); this.evidence.delete(key); this.stats.delete(key);

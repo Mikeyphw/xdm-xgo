@@ -51,8 +51,10 @@ EXTENSION_TESTS = [
     "app/XDM.Android/browser-extension/tests/test_phase43a_bridge.js",
     "app/XDM.Android/browser-extension/tests/test_release_gate.js",
     "app/XDM.Android/browser-extension/tests/test_mp02_discovery.js",
+    "app/XDM.Android/browser-extension/tests/test_mp02b_site_mode.js",
 ]
 EXTENSION_PYTHON = [
+    "scripts/test_xgo_mp02b_source_contract.py",
     "scripts/test_xgo_mp01_hf05_xpi_guard.py",
     "scripts/test_xgo_mp01_hf06_capture_contract.py",
     "scripts/test_xgo_mp02a_source_contract.py",
