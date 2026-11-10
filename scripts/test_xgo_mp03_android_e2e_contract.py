@@ -55,12 +55,18 @@ class AndroidE2EContract(unittest.TestCase):
         inbox=(APP/'ui/media/MediaInboxScreen.kt').read_text()
         schema=(APP/'engine/ManifestGraphV1Contract.kt').read_text()
         self.assertIn('manifestGraph = payload.optJSONObject("manifest_graph")?.let(ManifestGraphV1Contract::decode)',wire)
-        self.assertIn('suspend fun resolveManifest(captureId:',client)
+        # MP04 extends the MP03 API with explicit selection and revision fields.
+        # Verify the contract independent of Kotlin parameter line wrapping.
+        self.assertRegex(client, r'suspend\s+fun\s+resolveManifest\s*\(\s*captureId:\s*String\s*,\s*selection:\s*ManifestSelectionV1Contract\.Request\?\s*=\s*null\s*,\s*expectedRevision:\s*String\?\s*=\s*null')
+        self.assertIn('AndroidMediaUiWire.resolvePayload(requestId, captureId, selection, expectedRevision)',client)
         self.assertIn('onInspectManifest: (MediaCaptureRecord) -> Unit',card)
         self.assertIn('Text("Inspect Go manifest")',card)
         self.assertEqual(inbox.count('onInspectManifest = onInspectGoManifest,'),2)
-        self.assertIn('Mp03ManifestReviewDialog(result)',inbox)
-        self.assertIn('graph.qualities.take(6)',inbox)
+        self.assertIn('Mp03ManifestReviewDialog(',inbox)
+        self.assertIn('selection = manifestChoice,',inbox)
+        self.assertIn('goManifestClient.resolveManifest(captureId, manifestChoice, revision)',inbox)
+        self.assertRegex(inbox, r'items\s*\(\s*graph\.qualities\b')
+        self.assertIn('onSelectionChange(selection.copy(videoId = quality.id',inbox)
         self.assertNotIn('quality.transportUrl',inbox)
         self.assertIn('object ManifestGraphV1Contract',schema)
         self.assertIn('download_ready',schema)
@@ -68,6 +74,21 @@ class AndroidE2EContract(unittest.TestCase):
         fallback=(APP/'engine/AndroidMediaPlatformBroker.kt').read_text()
         self.assertIn('"finalize_adaptive"',fallback)
         self.assertIn('FfmpegOperation.FinalizeAdaptive(',fallback)
+    def test_mp04_selection_preserves_mp03_readonly_security_boundary(self):
+        # The MP04 planner is an ephemeral selection preview; no Go completion
+        # permission, Android credentials, stored manifest URLs or Kotlin fallback changes.
+        wire=(APP/'engine/AndroidMediaUiProtocol.kt').read_text()
+        ui=(APP/'ui/media/MediaInboxScreen.kt').read_text()
+        runtime=(RUNTIME/'android_manifest_resolve.go').read_text()
+        self.assertIn('manifestSelectionPlan = payload.optJSONObject("manifest_selection_plan")?.let(ManifestSelectionV1Contract::decode)',wire)
+        self.assertIn('if (selection != null) put("selection", selection.wire())',wire)
+        self.assertIn('if (expectedRevision != null)',wire)
+        self.assertIn('manifest_changed_refresh_required',runtime)
+        self.assertIn('selection_incompatible_or_stale',runtime)
+        self.assertIn('manifestSelectionPlan = null',ui)
+        self.assertIn('Plan only — not queued, not downloaded, not Complete.',ui)
+        self.assertNotIn('quality.transportUrl',ui)
+        self.assertNotIn('android.media.execute',ui)
     def test_ci05_and_tests_are_mandatory(self):
         policy=self.read('scripts/ci/xgo_ci_policy.py')
         for name in ('scripts/test_xgo_mp03_android_e2e_contract.py',
