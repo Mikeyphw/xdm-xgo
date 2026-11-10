@@ -1,0 +1,226 @@
+# MP08B3: separate real-media evidence, NEVER production qualification on PR.
+name: XGO MP08B3 Real Media Acceptance
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review, labeled]
+  workflow_dispatch:
+    inputs:
+      exact_head_sha:
+        description: Full 40-hex SHA to qualify; must match checked-out branch
+        required: true
+        type: string
+      x86_64_media_test:
+        description: Explicitly opt in to real API36 emulator/FFmpeg (default OFF)
+        required: true
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: mp08b3-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  source-and-real-media:
+    name: Source contracts and real Linux FFmpeg golden
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.pull_request.head.sha || inputs.exact_head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Exact source SHA and supported dispatch guard
+        shell: bash
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || inputs.exact_head_sha }}
+          IS_MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
+          BRANCH_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          if [[ "$IS_MANUAL" == true ]]; then
+            # No arbitrary SHA from an unrelated branch masquerading as this dispatch.
+            test "$BRANCH_SHA" = "$EXPECTED"
+          fi
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Source/staleness negative checks
+        run: python3 -B scripts/test_xgo_mp08b3_source_contract.py
+      - name: Install pinned Ubuntu 24.04 FFmpeg and FFprobe
+        shell: bash
+        run: |
+          set -euo pipefail
+          source /etc/os-release
+          test "$ID" = ubuntu
+          test "$VERSION_ID" = 24.04
+          sudo apt-get update -qq
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg
+          # Reuse MP00's 6.1.1 FFmpeg family, but do not hard-code an Ubuntu
+          # package patch revision. Both real executables are required.
+          python3 - <<'PY_FFMPEG_PIN'
+          import re, subprocess
+          for tool in ('ffmpeg', 'ffprobe'):
+              line = subprocess.check_output([tool, '-version'], text=True).splitlines()[0]
+              if not re.match(rf'^{tool} version 6\.1\.1(?:[-+.]|$)', line):
+                  raise SystemExit('MP08B3_FFMPEG_6_1_1_REQUIRED: ' + tool)
+          print('MP08B3_HOST_FFMPEG_6_1_1_READY')
+          PY_FFMPEG_PIN
+      - name: Run real FFmpeg with local video and audio sources
+        shell: bash
+        env:
+          EVIDENCE: ${{ runner.temp }}/mp08b3-real-media.json
+        run: |
+          set -euo pipefail
+          ffmpeg -version
+          ffprobe -version
+          python3 -B tests/media-parity/mp08b3_real_media.py --evidence "$EVIDENCE"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Compile real Android instrumentation tests on hosted CI
+        working-directory: app/XDM.Android
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+          ./gradlew --no-daemon --max-workers=2 :app:compileDebugAndroidTestKotlin
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mp08b3-linux-real-media-not-android
+          path: ${{ runner.temp }}/mp08b3-real-media.json
+          if-no-files-found: error
+          retention-days: 14
+  api36-real-android:
+    name: API36 real MediaStore and embedded runtime (opt-in only)
+    # New workflows are not workflow_dispatch-addressable before default-branch
+    # adoption. A repository maintainer can opt in on this PR via a label event.
+    # Fork PRs cannot request an Android instrumentation run through the label.
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.x86_64_media_test == true) ||
+      (github.event_name == 'pull_request' && github.event.action == 'labeled' &&
+       github.event.label.name == 'xgo-mp08b3-api36' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    needs: [source-and-real-media]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.pull_request.head.sha || inputs.exact_head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Refuse missing exact SHA or wrong PR provenance
+        shell: bash
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || inputs.exact_head_sha }}
+          BRANCH_SHA: ${{ github.sha }}
+          IS_MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
+          PR_HEAD_REPO: ${{ github.event.pull_request.head.repo.full_name }}
+          REPOSITORY: ${{ github.repository }}
+          IS_LABEL_EVENT: ${{ github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'xgo-mp08b3-api36' }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          if [[ "$IS_MANUAL" == true ]]; then
+            test "$EXPECTED" = "$BRANCH_SHA"
+          else
+            test "$IS_LABEL_EVENT" = true
+            test "$PR_HEAD_REPO" = "$REPOSITORY"
+          fi
+          test "$(uname -m)" = x86_64
+      - name: Enable runner KVM for real API36 instrumentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The preceding HF02 label run failed before provisioning the emulator.
+          # A readable/writable KVM node is needed. GitHub-hosted nodes can be
+          # owned by root:kvm while the Actions runner lacks KVM group membership.
+          if [[ ! -c /dev/kvm ]]; then
+            echo '::error title=MP08B3 KVM missing::/dev/kvm is not a character device; API36 is NOT qualified.'
+            exit 1
+          fi
+          stat -c 'MP08B3_KVM_NODE mode=%a owner=%U group=%G' /dev/kvm
+          id
+          if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
+            # Least privilege for this disposable runner; no world-readable 0666.
+            sudo chown "$(id -u):$(id -g)" /dev/kvm
+            sudo chmod 0600 /dev/kvm
+          fi
+          test -r /dev/kvm && test -w /dev/kvm || {
+            echo '::error title=MP08B3 KVM permission denied::/dev/kvm cannot be used by this runner.'
+            exit 1
+          }
+          python3 - <<'PY_KVM_OPEN'
+          import os
+          fd = os.open('/dev/kvm', os.O_RDWR | os.O_CLOEXEC)
+          os.close(fd)
+          print('MP08B3_KVM_OPEN_PASS')
+          PY_KVM_OPEN
+          echo 'MP08B3_KVM_ACCESS_READY'
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Provision API36 image and emulator host dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'platform-tools' 'emulator' 'system-images;android-36;google_apis;x86_64'
+          bash app/XDM.Android/tools/provision-hosted-emulator-runtime.sh --prepare
+          bash app/XDM.Android/tools/provision-hosted-emulator-runtime.sh --verify "$ANDROID_SDK_ROOT"
+      - name: API36 instrumentation, real MediaStore and required attested FFmpeg/FFprobe
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        env:
+          MP08B3_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || inputs.exact_head_sha }}
+          MP08B3_OPTED_IN: ${{ (github.event_name == 'workflow_dispatch' && inputs.x86_64_media_test == true) ||
+            (github.event_name == 'pull_request' && github.event.action == 'labeled' &&
+             github.event.label.name == 'xgo-mp08b3-api36' &&
+             github.event.pull_request.head.repo.full_name == github.repository) }}
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          force-avd-creation: true
+          disable-animations: true
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          # HF06: on instrumentation failure the Python driver prints only bounded,
+          # redacted process-local crash diagnostics and still fails closed.
+          # emulator-runner executes each script line via /usr/bin/sh -c,
+          # not one shared script. Exactly one POSIX-safe command is mandatory.
+          script: python3 -B scripts/test_xgo_mp08b3_source_contract.py --api36-execute
+  manual-qualification:
+    name: Explicit opt-in emulator gate — never green when skipped
+    if: >-
+      always() && ((github.event_name == 'workflow_dispatch') ||
+      (github.event_name == 'pull_request' && github.event.action == 'labeled' &&
+       github.event.label.name == 'xgo-mp08b3-api36' &&
+       github.event.pull_request.head.repo.full_name == github.repository))
+    needs: [source-and-real-media, api36-real-android]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Require affirmative real-device result
+        shell: bash
+        env:
+          OPTED_IN: ${{ (github.event_name == 'workflow_dispatch' && inputs.x86_64_media_test == true) ||
+            (github.event_name == 'pull_request' && github.event.action == 'labeled' &&
+             github.event.label.name == 'xgo-mp08b3-api36' &&
+             github.event.pull_request.head.repo.full_name == github.repository) }}
+          SOURCE: ${{ needs.source-and-real-media.result }}
+          EMULATOR: ${{ needs.api36-real-android.result }}
+        run: |
+          set -euo pipefail
+          test "$OPTED_IN" = true
+          test "$SOURCE" = success
+          test "$EMULATOR" = success
+          echo 'MP08B3_API36_EMULATOR_PASS (does NOT imply physical ARM64 or complete MP08)'
