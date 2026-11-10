@@ -35,7 +35,32 @@
   };
 
   function updateSettings(next) {
-    if (next && typeof next === "object") Object.assign(settings, next);
+    if (!next || typeof next !== "object") return;
+    // A narrower policy revokes previously observed signed URLs, headers, cached
+    // candidates and pending offers. Re-enablement starts with fresh evidence.
+    const before = JSON.stringify([settings.enabled, settings.autoDetectPlayingVideos,
+      settings.siteMode, settings.blacklist, settings.whitelist]);
+    Object.assign(settings, next);
+    const after = JSON.stringify([settings.enabled, settings.autoDetectPlayingVideos,
+      settings.siteMode, settings.blacklist, settings.whitelist]);
+    if (before !== after) revokeAllCaptureState();
+  }
+
+  function revokeAllCaptureState() {
+    const tabs = candidateStore.clearAll();
+    capturedHeaders.clear();
+    for (const timer of dispatchTimers.values()) clearTimeout(timer);
+    dispatchTimers.clear();
+    lastDispatchedByTab.clear();
+    tabDispatchSessions.clear();
+    diagnosticCounters.clear();
+    for (const tabId of tabs) updateBadge(tabId);
+  }
+
+  function forgetTabHeaders(tabId) {
+    for (const [requestId, entry] of capturedHeaders) {
+      if (Number(entry.tabId) === Number(tabId)) capturedHeaders.delete(requestId);
+    }
   }
 
   async function publishStatus(extra = {}) {
@@ -155,7 +180,7 @@
     if (!settings.enabled || !settings.autoDetectPlayingVideos) return false;
     if (settings.siteMode === "all") return true;
     let host = "";
-    try { host = normalizeHost(new URL(tabUrl).hostname); } catch (_) { return true; }
+    try { host = normalizeHost(new URL(tabUrl).hostname); } catch (_) { return false; }
     const list = settings.siteMode === "whitelist" ? settings.whitelist : settings.blacklist;
     const matched = (Array.isArray(list) ? list : []).some(item => {
       const domain = normalizeHost(item);
@@ -165,7 +190,10 @@
   }
 
   function tabUrlAllowedForCapture(details) {
-    const source = details && (details.documentUrl || details.originUrl || details.initiator || details.url || "");
+    // The CDN request URL is not evidence of the embedding page's site policy.
+    // Under a blacklist/whitelist, an unknown document origin must fail closed.
+    const source = details && (details.documentUrl || details.originUrl || details.initiator || "");
+    if (!source && settings.siteMode !== "all") return false;
     return tabAllowed(source);
   }
 
@@ -481,6 +509,8 @@
   function processPageObservation(message, sender) {
     const tabId = sender && sender.tab ? sender.tab.id : -1;
     if (tabId === -1 || !message || typeof message !== "object") return false;
+    // Main-world hints must not resurrect a tab after capture was disabled.
+    if (!tabAllowed(sender && sender.tab && sender.tab.url || sender && sender.url || "")) return false;
     const observation = message.observation && typeof message.observation === "object" ? message.observation : {};
     const frameId = Number.isFinite(Number(sender.frameId)) ? Number(sender.frameId) : 0;
     // sender.url is extension-owned frame provenance. Never trust a page-provided pageUrl/referrer.
@@ -518,7 +548,7 @@
     if (bodyExcerpt && responseUrl && evidence) {
       const analysis = CORE.analyzeBody({
         text: bodyExcerpt,
-        contentType: observation.contentType || evidence.contentType || "",
+        contentType: evidence.contentType || observation.contentType || "",
         responseUrl
       });
       if (analysis.manifestBody) {
@@ -553,7 +583,7 @@
           headers: correlated.headers || {},
           requestFingerprint: correlated.requestFingerprint,
           stableMediaId: correlated.stableMediaId,
-          parentManifestUrl: analysis.hlsBody ? responseUrl : "",
+          parentManifestUrl: analysis.hlsBody || analysis.dashBody ? responseUrl : "",
           at: Date.now(),
         })) || added;
       }
@@ -566,6 +596,7 @@
   function processFramePlayback(message, sender) {
     const tabId = sender && sender.tab ? sender.tab.id : -1;
     if (tabId === -1 || !message || !message.candidate) return false;
+    if (!tabAllowed(sender && sender.tab && sender.tab.url || sender && sender.url || "")) return false;
     const value = message.candidate;
     const frameId = Number.isFinite(Number(sender.frameId)) ? Number(sender.frameId) : 0;
     const counter = counterFor(tabId);
@@ -623,6 +654,7 @@
         requestType: candidate.requestType || "",
         reason: candidate.reason || "",
         pageUrl: uiOnlyUrl(candidate.pageUrl || ""),
+        frameId: Number(candidate.frameId || 0),
         frameUrl: uiOnlyUrl(candidate.frameUrl || ""),
         playbackObserved: Boolean(candidate.playbackObserved),
         thumbnailUrl: "",
@@ -784,8 +816,13 @@
 
     browser.webRequest.onHeadersReceived.addListener(
       details => {
-        if (details.tabId === -1 || !settings.enabled || !settings.autoDetectPlayingVideos || !tabUrlAllowedForCapture(details)) return;
+        if (details.tabId === -1 || !settings.enabled || !settings.autoDetectPlayingVideos) return;
         const captured = capturedHeaders.get(details.requestId);
+        const fromDocument = tabUrlAllowedForCapture(details);
+        const hasDocument = Boolean(details.documentUrl || details.originUrl || details.initiator);
+        const priorDocument = !hasDocument && captured && Number(captured.tabId) === Number(details.tabId) &&
+          tabAllowed(captured.frameUrl || captured.tabUrl || "");
+        if (!fromDocument && !priorDocument) return;
         addClassifiedResponse(details.tabId, {
           url: details.url,
           contentType: headerValue(details.responseHeaders, "content-type"),
@@ -810,18 +847,31 @@
     if (browser.webNavigation && browser.webNavigation.onCommitted && browser.webNavigation.onCommitted.addListener) {
       browser.webNavigation.onCommitted.addListener(details => {
         if (details.tabId === -1) return;
-        candidateStore.clearDocumentEvidence(details.tabId, Number.isFinite(Number(details.frameId)) ? Number(details.frameId) : null);
+        const committedFrame = Number.isFinite(Number(details.frameId)) ? Number(details.frameId) : 0;
+        if (committedFrame === 0) {
+          candidateStore.removeTab(details.tabId);
+          diagnosticCounters.delete(details.tabId);
+          if (dispatchTimers.has(details.tabId)) clearTimeout(dispatchTimers.get(details.tabId));
+          dispatchTimers.delete(details.tabId);
+        } else candidateStore.clearFrame(details.tabId, committedFrame);
+        updateBadge(details.tabId);
         for (const [requestId, entry] of capturedHeaders) {
           if (Number(entry.tabId || details.tabId) === Number(details.tabId) && Number(entry.frameId || 0) === Number(details.frameId || 0)) capturedHeaders.delete(requestId);
         }
-        if (Number(details.frameId || 0) === 0) lastDispatchedByTab.delete(details.tabId);
+        if (Number(details.frameId || 0) === 0) {
+          lastDispatchedByTab.delete(details.tabId);
+          tabDispatchSessions.delete(details.tabId);
+        }
       });
     }
     if (browser.tabs && browser.tabs.onUpdated && browser.tabs.onUpdated.addListener) {
       browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
         if (changeInfo && (changeInfo.url || changeInfo.status === "loading")) {
-          candidateStore.clearDocumentEvidence(tabId);
+          forgetTabHeaders(tabId);
+          candidateStore.removeTab(tabId);
+          diagnosticCounters.delete(tabId);
           lastDispatchedByTab.delete(tabId);
+          updateBadge(tabId);
         }
       });
     }
@@ -829,6 +879,7 @@
     browser.tabs.onRemoved.addListener(tabId => {
       // Request headers are keyed by requestId. Tab removal must not accidentally delete a same-numbered request id.
       tabDispatchSessions.delete(tabId);
+      forgetTabHeaders(tabId);
       candidateStore.removeTab(tabId);
       lastDispatchedByTab.delete(tabId);
       diagnosticCounters.delete(tabId);

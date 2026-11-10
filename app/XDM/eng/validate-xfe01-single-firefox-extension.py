@@ -14,10 +14,10 @@ CANONICAL = ROOT / "app/XDM.Android/browser-extension/src/main/extension/xdm-fir
 CANONICAL_ID = "xdm-android-media-bridge@mikeyphw"
 EXPECTED_HASHES = {
     "bridge-selftest.js": "7c442bee5be87e6802e9f82f6fcca88daede13377fbbd70dd6e85216b0022eb6",
-    "candidate-store.js": "fe269e3e27cfaebbd21c546b87c5bb7924a794701ee1ba73e07b28abbd44ebba",
-    "detector-core.js": "91605a16aeea7f2d31eed4f017219e6b8bda513a09cad63f500c8ccec6677a0c",
+    "candidate-store.js": "48fad2274ff84fed18c1164ec18dc81cee3d0d63471d09c49257ec16f55cc10a",
+    "detector-core.js": "2781fadd685735072f1fddbed12c55e7cc83cf75ed719a3ae262f8ff481bb130",
     "extension.css": "5f9d10da55bea57317d0f01db7a3a06ad4c4a196201a942027e25e751b6d4fcf",
-    "fab.js": "b05c1aeacc23c0ab5dc4699dc1de4baf40e34727a91457558d0c5712721fcf16",
+    "fab.js": "c08b13e5a04ad29ec8df80722a653cb37145aa4605d27a317d102dd37ae92fe8",
     "frame-bridge.js": "06c45a4fea9d098cbd446bd5c98bb69a7c2ccd7047526b8d5fabcb13cf507fa9",
     "generated-config.template.js": "0cd67c0565d9a1d94c2d8b0efe0e14e9c29565c926babe90208e07b7dac40033",
     "generated-theme.template.css": "b52a7938b8df6faf687e81f0a39899acf2fa89ff19a3d21b6a8508602acef735",
@@ -25,10 +25,10 @@ EXPECTED_HASHES = {
     "icons/icon48.png": "1ffad2f3f3e18ce0558fb506deb38c600f1747bb0dc0a5b1ad8c7ea448d8373b",
     "icons/icon96.png": "0f442e4f1c9075c0d8bdbe20a71102fa13bb6e603770010e78e1a87c27a7aa2f",
     "manifest.template.json": "e823a9405bfbbbcdffebefa06ae380ce783c0344e1ade80e6239893c01b47683",
-    "network-observer.js": "d4c938d07d4148e1619ac1c0e8fad122767a46b6407183cbbadcc2df17af7797",
+    "network-observer.js": "41d318bd5fde016f9b1f052714d747e88160a996dcfdb96fb6c69fd8a8df87de",
     "page-sniffer.js": "165ca7e2c610b3358b588d6c956ceb773a39d8b81d535a6aaf5f89ec4f74e63a",
     "popup.html": "d0eb8c568390257d470ff09bd61df1e385ebb36401f77bf8883408c26b9e4c31",
-    "popup.js": "837effe14e18121aded38b1e40b5af7c97809af93fe9f7752cff63d1764b2f7f",
+    "popup.js": "09741ec7d3b31eafdda8bc12e89471bb9d0602dcd570fc10a09d562b4b899e57",
 }
 
 

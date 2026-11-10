@@ -54,7 +54,15 @@ class BrowserEmulatorGateTests(unittest.TestCase):
         workflow = (ROOT / '.github/workflows/android.yml').read_text()
         runner = (ROOT / 'app/XDM.Android/tools/run-hosted-emulator-persistence-tests.sh').read_text()
         gradle = (ROOT / 'app/XDM.Android/browser-integration/build.gradle.kts').read_text()
-        self.assertEqual(workflow.count("      - 'scripts/test_xgo_xp02b_browser_emulator_ci.py'"), 2)
+        # CI05: ordinary PRs use targeted CI; original Android/Room/emulator
+        # qualification stays on manual dispatch and Android release tags.
+        self.assertNotIn('  pull_request:', workflow)
+        self.assertIn("  push:\n    tags: ['android-v*']", workflow)
+        self.assertIn('  workflow_dispatch:', workflow)
+        targeted = (ROOT / '.github/workflows/xgo-targeted.yml').read_text()
+        policy = (ROOT / 'scripts/ci/xgo_ci_policy.py').read_text()
+        self.assertIn('scripts/ci/xgo_ci_policy.py', targeted)
+        self.assertIn('scripts/test_xgo_xp02b_browser_emulator_ci.py', policy)
         self.assertIn('python3 -B scripts/test_xgo_xp02b_browser_emulator_ci.py', workflow)
         self.assertIn('xdm-emulator-browser-intake-test-results', workflow)
         self.assertIn('xdm-emulator-persistence-test-results', workflow)

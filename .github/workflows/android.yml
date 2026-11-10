@@ -2,60 +2,7 @@ name: XDM Android CI
 
 on:
   push:
-    branches: [main]
     tags: ['android-v*']
-    paths:
-      - 'app/XDM.Android/**'
-      - 'engine/**'
-      - 'go.work'
-      - 'tools/xgo/**'
-      - '.devtool.toml'
-      - 'build-release-apk.sh'
-      - '.github/workflows/android.yml'
-      - 'scripts/xgo_hf16_apk_pair.py'
-      - 'scripts/test_xgo_hf16_apk_pair.py'
-      - 'scripts/test_xgo_hf18_ci_dispatch.py'
-      - 'scripts/test_xgo_hf19_arm64_runtime_gate.py'
-      - 'scripts/test_xgo_hf15_no_firebase.py'
-      - 'scripts/run_physical_arm64_instrumentation.sh'
-      - 'scripts/test_xgo_emulator_persistence_ci.py'
-      - 'scripts/test_xgo_xp02b_browser_emulator_ci.py'
-      - 'scripts/test_xgo_x86_64_build_profile.py'
-      - 'scripts/xgo_x86_64_profile.py'
-      - 'scripts/verify_xgo_x86_apk.py'
-      - 'scripts/run_xgo_x86_64_emulator.sh'
-      - 'scripts/test_xgo_mp01_hf04_ci_tiers.py'
-      - 'scripts/test_xgo_xpi_v161_parity.py'
-      - 'scripts/test_xgo_mp01_hf05_xpi_guard.py'
-      - 'scripts/test_xgo_mp01_hf06_capture_contract.py'
-      - 'scripts/test_xgo_mp01_hf07_emulator_contract.py'
-  pull_request:
-    paths:
-      - 'app/XDM.Android/**'
-      - 'engine/**'
-      - 'go.work'
-      - 'tools/xgo/**'
-      - '.devtool.toml'
-      - 'build-release-apk.sh'
-      - '.github/workflows/android.yml'
-      - 'scripts/xgo_hf16_apk_pair.py'
-      - 'scripts/test_xgo_hf16_apk_pair.py'
-      - 'scripts/test_xgo_hf18_ci_dispatch.py'
-      - 'scripts/test_xgo_hf19_arm64_runtime_gate.py'
-      - 'scripts/test_xgo_hf15_no_firebase.py'
-      - 'scripts/run_physical_arm64_instrumentation.sh'
-      - 'scripts/test_xgo_emulator_persistence_ci.py'
-      - 'scripts/test_xgo_xp02b_browser_emulator_ci.py'
-      - 'scripts/test_xgo_x86_64_build_profile.py'
-      - 'scripts/xgo_x86_64_profile.py'
-      - 'scripts/verify_xgo_x86_apk.py'
-      - 'scripts/run_xgo_x86_64_emulator.sh'
-      - 'scripts/test_xgo_mp01_hf04_ci_tiers.py'
-      - 'scripts/test_xgo_xpi_v161_parity.py'
-      - 'scripts/test_xgo_mp01_hf05_xpi_guard.py'
-      - 'scripts/test_xgo_mp01_hf06_capture_contract.py'
-      - 'scripts/test_xgo_mp01_hf07_emulator_contract.py'
-    types: [opened, reopened, synchronize, labeled, unlabeled, ready_for_review]
   workflow_dispatch:
     inputs:
       arm64_translation_diagnostic:
@@ -112,7 +59,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for suite in test_detector.js test_handoff.js test_secure_handoff.js test_fab.js test_phase43a_bridge.js test_background.js test_release_gate.js; do
+          for suite in test_detector.js test_handoff.js test_secure_handoff.js test_fab.js test_phase43a_bridge.js test_background.js test_release_gate.js test_mp02_discovery.js test_mp02b_site_mode.js; do
             node "browser-extension/tests/$suite"
           done
       - name: XP01 canonical XPI, encrypted transport, and historical provenance (no Gradle)
@@ -129,6 +76,8 @@ jobs:
           set -euo pipefail
           python3 -B scripts/test_xgo_xp02b_browser_emulator_ci.py
           python3 -B scripts/test_xgo_mp01_hf07_emulator_contract.py
+          python3 -B scripts/test_xgo_mp02a_source_contract.py
+          python3 -B scripts/test_xgo_mp02b_source_contract.py
       - name: MP01 HF06 encrypted XPI pairing and Android JVM contract preflight (no Gradle)
         working-directory: .
         run: python3 -B scripts/test_xgo_mp01_hf06_capture_contract.py
