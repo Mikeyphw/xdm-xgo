@@ -42,6 +42,15 @@ class MP07Staleness(unittest.TestCase):
             self.assertIn(anchor,before)
             self.assertIn(anchor,after)
         self.assertIn('tests.update(MP07_PYTHON)',after)
+        # MP08A registers two new mandatory CI05 tests. Strip *only* that
+        # exact new block before preserving MP07's original immutable diff.
+        mp08_block = ('MP08_PYTHON = [\n'
+                      '    "scripts/test_xgo_mp08_source_contract.py",\n'
+                      '    "scripts/test_xgo_mp08_staleness_audit.py",\n'
+                      ']\n')
+        self.assertEqual(after.count(mp08_block),1)
+        self.assertEqual(after.count('        tests.update(MP08_PYTHON)\n'),1)
+        after=after.replace(mp08_block,'',1).replace('        tests.update(MP08_PYTHON)\n','',1)
         self.assertEqual(after.replace('MP07_PYTHON = [\n    "scripts/test_xgo_mp07_source_contract.py",\n    "scripts/test_xgo_mp07_staleness_audit.py",\n]\n', '').replace('        tests.update(MP07_PYTHON)\n',''),before)
     def test_legacy_phase_contracts_still_in_repository(self):
         for file in ('scripts/test_xgo_mp03_source_contract.py',
