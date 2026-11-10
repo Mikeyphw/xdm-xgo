@@ -220,6 +220,10 @@ class AndroidEngineProcessAuthority(context: Context) {
                 appContext,
                 com.mikeyphw.xdm.android.media.ffmpeg.EmbeddedFfmpegRuntime(appContext),
             ),
+            AndroidMP08PublicationBroker(
+                appContext,
+                com.mikeyphw.xdm.android.media.ffmpeg.EmbeddedFfmpegRuntime(appContext),
+            ),
         )
         framePump = scope.launch {
             while (isActive) {

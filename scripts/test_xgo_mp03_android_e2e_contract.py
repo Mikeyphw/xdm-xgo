@@ -2,6 +2,7 @@
 """MP03 production Android -> Go -> platform network -> Compose security contracts."""
 from __future__ import annotations
 from pathlib import Path
+import re
 import unittest
 ROOT=Path(__file__).resolve().parents[1]
 APP=ROOT/'app/XDM.Android/app/src/main/kotlin/com/mikeyphw/xdm/android'
@@ -9,12 +10,58 @@ RUNTIME=ROOT/'engine/runtime'
 
 class AndroidE2EContract(unittest.TestCase):
     def read(self, rel): return (ROOT/rel).read_text()
+    def assert_platform_kind_contract(self, broker):
+        # The allowed kind switch can grow without changing the older MP03
+        # request kinds. Verify declarations AND the actual allowlist; do not
+        # depend on adjacent enum names or exact Go formatting.
+        required = {
+            "ExternalMediaTool": "external_media_tool",
+            "ManifestFetch": "manifest_fetch",
+            "MP08Finalization": "mp08_finalization",
+        }
+        for kind, wire in required.items():
+            self.assertRegex(
+                broker,
+                rf"(?m)^[ \t]*{re.escape(kind)}[ \t]+Kind[ \t]*=[ \t]*\"{re.escape(wire)}\"[ \t]*$",
+                f"missing or changed Go platform Kind: {kind}",
+            )
+        match = re.search(
+            r"(?s)\bfunc\s*\(\s*k\s+Kind\s*\)\s+Valid\s*\(\s*\)\s+bool\s*\{\s*switch\s+k\s*\{\s*case\s+([\w,\s]+?):\s*return\s+true\s+default\s*:\s*return\s+false\s*\}",
+            broker,
+        )
+        self.assertIsNotNone(match, "platform Kind.Valid must reject unknown kinds")
+        allowed = {kind.strip() for kind in match.group(1).split(",")}
+        self.assertTrue(required.keys() <= allowed, f"platform Kind.Valid missing {required.keys() - allowed}")
+
+    def test_platform_kind_contract_rejects_missing_legacy_or_new_wiring(self):
+        source = self.read("engine/runtime/platform/broker.go")
+        mutations = []
+        for kind, wire in (("ManifestFetch", "manifest_fetch"),
+                           ("ExternalMediaTool", "external_media_tool"),
+                           ("MP08Finalization", "mp08_finalization")):
+            changed, count = re.subn(
+                rf'(?m)^[ \t]*{re.escape(kind)}[ \t]+Kind[ \t]*=[ \t]*"{re.escape(wire)}"[ \t]*$',
+                '', source, count=1)
+            self.assertEqual(count, 1, f"missing declaration anchor: {kind}")
+            mutations.append(changed)
+        switch = re.search(r'(?s)\bfunc\s*\(\s*k\s+Kind\s*\)\s+Valid\s*\(\s*\)\s+bool\s*\{.*?\}', source)
+        self.assertIsNotNone(switch, "missing Kind.Valid switch for negative test")
+        for kind in ("ExternalMediaTool", "ManifestFetch", "MP08Finalization"):
+            changed = switch.group(0).replace(kind, "", 1)
+            self.assertNotEqual(changed, switch.group(0), f"missing Kind.Valid member: {kind}")
+            mutations.append(source.replace(switch.group(0), changed, 1))
+        changed, count = re.subn(r'(?s)(\bdefault\s*:\s*)return\s+false\b', r'\1return true', source, count=1)
+        self.assertEqual(count, 1, "missing fail-closed default")
+        mutations.append(changed)
+        for index, mutation in enumerate(mutations):
+            self.assertNotEqual(mutation, source, f"missing negative mutation anchor {index}")
+            with self.subTest(index=index), self.assertRaises(AssertionError):
+                self.assert_platform_kind_contract(mutation)
     def test_typed_go_platform_contract_is_live(self):
         broker=self.read('engine/runtime/platform/broker.go')
         engine=self.read('engine/runtime/engine.go')
         bridge=self.read('engine/runtime/android_manifest_resolve.go')
-        for value in ('ManifestFetch           Kind = "manifest_fetch"','ExternalMediaTool, ManifestFetch,'):
-            self.assertIn(value,broker)
+        self.assert_platform_kind_contract(broker)
         self.assertIn('e.handlers[AndroidMediaResolveKind] = e.androidMediaResolveHandler',engine)
         for val in ('platform.ManifestFetch', 'ResolveManifestGraph(ctx, root, fetch, policy)',
                     'manifestRoot(input.CaptureID)', 'decodeAndroidManifestFetch(reply.Payload)',

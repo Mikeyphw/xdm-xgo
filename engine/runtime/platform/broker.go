@@ -29,6 +29,7 @@ const (
 	RuntimeConditions      Kind = "runtime_conditions"
 	Publication            Kind = "publication"
 	ExternalMediaTool      Kind = "external_media_tool"
+	MP08Finalization       Kind = "mp08_finalization"
 	AndroidFragmentStore Kind = "android_fragment_store"
 	ManifestFetch           Kind = "manifest_fetch"
 	AndroidDownloadCommand Kind = "android_download_command"
@@ -38,7 +39,7 @@ const (
 
 func (k Kind) Valid() bool {
 	switch k {
-	case SecretLookup, SystemProxy, NetworkPolicy, RuntimeConditions, Publication, ExternalMediaTool, ManifestFetch, AndroidFragmentStore, AndroidDownloadCommand, DesktopDownloadCommand, Wakeup:
+	case SecretLookup, SystemProxy, NetworkPolicy, RuntimeConditions, Publication, ExternalMediaTool, MP08Finalization, ManifestFetch, AndroidFragmentStore, AndroidDownloadCommand, DesktopDownloadCommand, Wakeup:
 		return true
 	default:
 		return false
