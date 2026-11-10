@@ -1,0 +1,154 @@
+# MP08B3: separate real-media evidence, NEVER production qualification on PR.
+name: XGO MP08B3 Real Media Acceptance
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+  workflow_dispatch:
+    inputs:
+      exact_head_sha:
+        description: Full 40-hex SHA to qualify; must match checked-out branch
+        required: true
+        type: string
+      x86_64_media_test:
+        description: Explicitly opt in to real API36 emulator/FFmpeg (default OFF)
+        required: true
+        type: boolean
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: mp08b3-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+jobs:
+  source-and-real-media:
+    name: Source contracts and real Linux FFmpeg golden
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.pull_request.head.sha || inputs.exact_head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Exact source SHA and supported dispatch guard
+        shell: bash
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || inputs.exact_head_sha }}
+          IS_MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
+          BRANCH_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          if [[ "$IS_MANUAL" == true ]]; then
+            # No arbitrary SHA from an unrelated branch masquerading as this dispatch.
+            test "$BRANCH_SHA" = "$EXPECTED"
+          fi
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Source/staleness negative checks
+        run: python3 -B scripts/test_xgo_mp08b3_source_contract.py
+      - name: Run real FFmpeg with local video and audio sources
+        shell: bash
+        env:
+          EVIDENCE: ${{ runner.temp }}/mp08b3-real-media.json
+        run: |
+          set -euo pipefail
+          ffmpeg -version
+          ffprobe -version
+          python3 -B tests/media-parity/mp08b3_real_media.py --evidence "$EVIDENCE"
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Compile real Android instrumentation tests on hosted CI
+        working-directory: app/XDM.Android
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
+          ./gradlew --no-daemon --max-workers=2 :app:compileDebugAndroidTestKotlin
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: mp08b3-linux-real-media-not-android
+          path: ${{ runner.temp }}/mp08b3-real-media.json
+          if-no-files-found: error
+          retention-days: 14
+  api36-real-android:
+    name: API36 real MediaStore and embedded runtime (opt-in only)
+    if: github.event_name == 'workflow_dispatch' && inputs.x86_64_media_test == true
+    needs: [source-and-real-media]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ inputs.exact_head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Refuse missing exact SHA, wrong host or KVM
+        shell: bash
+        env:
+          EXPECTED: ${{ inputs.exact_head_sha }}
+          BRANCH_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED" =~ ^[0-9a-f]{40}$ ]]
+          test "$EXPECTED" = "$BRANCH_SHA"
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          test "$(uname -m)" = x86_64
+          test -r /dev/kvm && test -w /dev/kvm
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
+      - uses: gradle/actions/setup-gradle@v4
+      - name: Provision API36 image and emulator host dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'platform-tools' 'emulator' 'system-images;android-36;google_apis;x86_64'
+          bash app/XDM.Android/tools/provision-hosted-emulator-runtime.sh --prepare
+          bash app/XDM.Android/tools/provision-hosted-emulator-runtime.sh --verify "$ANDROID_SDK_ROOT"
+      - name: API36 instrumentation, real MediaStore and required attested FFmpeg/FFprobe
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          force-avd-creation: true
+          disable-animations: true
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          script: |
+            set -euo pipefail
+            test "$(adb shell getprop ro.build.version.sdk | tr -d '\r')" = 36
+            test "$(adb shell getprop ro.kernel.qemu | tr -d '\r')" = 1
+            cd app/XDM.Android
+            # The test itself REQUIRES a qualified packaged FFmpeg/FFprobe runtime.
+            # ABI mismatch or missing runtime is a failure, not a skipped test.
+            ./gradlew --no-daemon --max-workers=2 :app:connectedDebugAndroidTest \
+              -Pandroid.testInstrumentationRunnerArguments.class=com.mikeyphw.xdm.android.MP08B3MediaStoreAcceptanceInstrumentedTest
+  manual-qualification:
+    name: Manual emulator gate — never green when skipped
+    if: always() && github.event_name == 'workflow_dispatch'
+    needs: [source-and-real-media, api36-real-android]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 3
+    steps:
+      - name: Require affirmative real-device result
+        shell: bash
+        env:
+          OPTED_IN: ${{ inputs.x86_64_media_test }}
+          SOURCE: ${{ needs.source-and-real-media.result }}
+          EMULATOR: ${{ needs.api36-real-android.result }}
+        run: |
+          set -euo pipefail
+          test "$OPTED_IN" = true
+          test "$SOURCE" = success
+          test "$EMULATOR" = success
+          echo 'MP08B3_API36_EMULATOR_PASS (does NOT imply physical ARM64 or complete MP08)'
