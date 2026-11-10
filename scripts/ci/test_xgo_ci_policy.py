@@ -39,6 +39,18 @@ class TargetTests(unittest.TestCase):
         self.assertIn("scripts/test_xgo_mp06_source_contract.py", plan["tests"])
         self.assertIn("scripts/test_xgo_mp06_staleness_audit.py", plan["tests"])
 
+    def test_mp07_go_multi_period_requires_real_go_and_security_contracts(self):
+        plan=policy.classify(["engine/media/dash_period_session.go"])
+        self.assertTrue(plan["needs_go"])
+        self.assertFalse(plan["needs_android_compile"])
+        self.assertIn("scripts/test_xgo_mp07_source_contract.py",plan["tests"])
+        self.assertIn("scripts/test_xgo_mp07_staleness_audit.py",plan["tests"])
+        # Mixed Android source changes must still compile Kotlin.
+        mixed=policy.classify(["engine/media/dash_period_session.go", "app/XDM.Android/media/src/main/kotlin/Media.kt"])
+        self.assertTrue(mixed["needs_go"])
+        self.assertTrue(mixed["needs_android_compile"])
+        self.assertIn("scripts/test_xgo_mp07_source_contract.py",mixed["tests"])
+
     def test_go_not_desktop_or_android(self):
         plan = policy.classify(["engine/media/graph.go"])
         self.assertTrue(plan["needs_go"])
