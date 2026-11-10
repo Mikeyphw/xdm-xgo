@@ -189,6 +189,24 @@ func fragmentSHA(payload []byte) string {
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
 
+// The HLS media byte range is a CIPHERTEXT transport range. After authorized
+// AES-128 CBC + PKCS#7 decryption, the stored plaintext is 1..16 bytes
+// shorter. The journal records the real stored byte count and SHA-256; no
+// mismatch is permitted for unencrypted media, DASH, or initialization maps.
+// The key identity must be a one-way digest, never a signed URL.
+func fragmentStoredRangeAllowed(input FragmentRecord, storedBytes int64) bool {
+    rng := input.Identity.Range
+    if rng == nil { return true }
+    if input.Identity.Protocol == FragmentProtocolHLS && input.Role == "media" &&
+        strings.HasPrefix(input.Identity.EncryptionID, "aes-128:hls-key_") {
+        // A source ciphertext range may not be committed as undeciphered bytes.
+        paddingBytes := rng.Length - storedBytes
+        return rng.Length >= 16 && rng.Length%16 == 0 && storedBytes > 0 &&
+            paddingBytes >= 1 && paddingBytes <= 16
+    }
+    return rng.Length == storedBytes
+}
+
 // WriteAndCommitFragment performs generation-CAS, quota checks, actual file
 // flush, directory fsync, journal atomic replacement, then readback proof.
 // A crash before journal commit leaves an unreferenced file, never a phantom
@@ -210,9 +228,9 @@ func (s *FileFragmentStore) WriteAndCommitFragment(ctx context.Context, input Fr
 	if input.AttemptGeneration <= 0 || len(payload) == 0 || int64(len(payload)) > s.maxBytes || input.Role == "key" {
 		return FragmentRecord{}, ErrInvalidFragment
 	}
-	if input.Identity.Range != nil && input.Identity.Range.Length != int64(len(payload)) {
-		return FragmentRecord{}, ErrInvalidFragment
-	}
+	if strings.Contains(input.Identity.EncryptionID, "://") || !fragmentStoredRangeAllowed(input, int64(len(payload))) {
+        return FragmentRecord{}, ErrInvalidFragment
+    }
 	digest := fragmentSHA(payload)
 	if input.Hash != "" && input.Hash != digest {
 		return FragmentRecord{}, ErrFragmentHashMismatch

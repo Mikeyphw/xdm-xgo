@@ -93,6 +93,23 @@ class MP05Contracts(unittest.TestCase):
   self.assertGreaterEqual(len(re.findall(r'\b1\s*<<\s*32\b',fixture)),2)
   self.assertIn('NewFileFragmentStore(t.TempDir()',source('engine/media/hls_execution_test.go'))
   self.assertIn('NewFileFragmentStore(t.TempDir()',source('engine/media/dash_test.go'))
+ def test_mp05_aes128_transport_vs_plaintext_and_key_privacy(self):
+  store=source('engine/media/fragment_store.go')
+  timeline=source('engine/media/hls_timeline.go')
+  tests=source('engine/media/fragment_store_test.go')
+  lineage=source('engine/media/hls_timeline_test.go')
+  self.assertIn('func fragmentStoredRangeAllowed(',store)
+  self.assertIn('!fragmentStoredRangeAllowed(input, int64(len(payload)))',store)
+  self.assertIn('strings.HasPrefix(input.Identity.EncryptionID, "aes-128:hls-key_")',store)
+  self.assertIn('paddingBytes >= 1 && paddingBytes <= 16',store)
+  self.assertIn('input.Identity.Protocol == FragmentProtocolHLS && input.Role == "media"',store)
+  self.assertIn('strings.Contains(input.Identity.EncryptionID, "://")',store)
+  self.assertIn('digestID("hls-key",',timeline)
+  self.assertNotIn('string(seg.Key.Method), seg.Key.ResolvedURI, seg.Key.IV',timeline)
+  for test in ('TestMP05STORE11AES128CipherRangePlaintextReadback',
+               'TestMP05STORE12AES128RangeBypassFailsClosed'):
+   self.assertIn(test,tests)
+  self.assertIn('TestMP05HLSKeyIdentityDoesNotRetainSignedURL',lineage)
  def test_ci05_exact_go_android_mandatory(self):
   policy=source('scripts/ci/xgo_ci_policy.py')
   workflow=source('.github/workflows/xgo-targeted.yml')

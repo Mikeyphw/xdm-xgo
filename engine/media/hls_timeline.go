@@ -37,7 +37,9 @@ func HLSTimelineIdentity(seg HLSSegment) (FragmentIdentity, error) {
 	}
 	enc := ""
 	if seg.Key != nil {
-		enc = strings.Join([]string{string(seg.Key.Method), seg.Key.ResolvedURI, seg.Key.IV}, "|")
+		// The encryption identity must survive key rotation comparisons without
+        // leaking signed key URLs or IV parameters to the persistent journal.
+        enc = string(seg.Key.Method) + ":" + digestID("hls-key", strings.Join([]string{seg.Key.ResolvedURI, seg.Key.IV}, "\x00"))
 	}
 	timeline := fmt.Sprintf("hls:%d:%d", seg.DiscontinuitySequence, seg.MediaSequence)
 	return FragmentIdentity{Protocol: FragmentProtocolHLS, TimelineKey: timeline, ResourceID: res.ResourceID, Range: cloneByteRange(seg.Range), EncryptionID: enc}, nil

@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"strings"
 	"testing"
 )
 
@@ -174,4 +175,51 @@ func TestMP05StoreSymlinkRootRefused(t *testing.T) {
 	if _, err := NewFileFragmentStore(link, 1024); !errors.Is(err, ErrFragmentUnsafePath) {
 		t.Fatal("symlink root accepted", err)
 	}
+}
+
+// A transport byte range covers AES-128 ciphertext, while the durable
+// artifact contains post-decryption plaintext. Both sizes must be checked
+// against their own semantics, never blindly equated.
+func TestMP05STORE11AES128CipherRangePlaintextReadback(t *testing.T) {
+    dir:=filepath.Join(t.TempDir(), "store")
+    s:=mp05New(t, dir, 4096)
+    id:=mp05Identity("aes128-ranged")
+    id.Range=&ByteRange{Offset:10,Length:32}
+    id.EncryptionID="aes-128:hls-key_"+strings.Repeat("a",64)
+    data:=[]byte("first-clear-fragment")
+    rec,err:=s.WriteAndCommitFragment(context.Background(),FragmentRecord{Identity:id,Role:"media",AttemptGeneration:1},data)
+    if err!=nil || rec.ExpectedLength!=int64(len(data)) || rec.Identity.Range.Length!=32 {
+        t.Fatalf("ciphertext range must preserve transport size while storing plaintext: %+v %v",rec,err)
+    }
+    if err:=s.VerifyCommitted(rec);err!=nil{t.Fatal("readback",err)}
+    reloaded:=mp05New(t,dir,4096)
+    if err:=reloaded.VerifyCommitted(rec);err!=nil{t.Fatal("restart",err)}
+    raw,err:=os.ReadFile(filepath.Join(dir,"journal-v1.json"))
+    if err!=nil {t.Fatal(err)}
+    if strings.Contains(string(raw),"https://") || strings.Contains(string(raw),"token=") {
+        t.Fatal("signed key URL in durable journal")
+    }
+}
+func TestMP05STORE12AES128RangeBypassFailsClosed(t *testing.T) {
+    cases:=[]struct{name,role,proto,enc string; sourceLen int64; body string}{
+        {"clear-range", "media", "hls", "",32,"first-clear-fragment"},
+        {"init-map", "init", "hls", "aes-128:hls-key_"+strings.Repeat("a",64),32,"first-clear-fragment"},
+        {"dash-track", "media", "dash", "aes-128:hls-key_"+strings.Repeat("a",64),32,"first-clear-fragment"},
+        {"non-block-aligned", "media", "hls", "aes-128:hls-key_"+strings.Repeat("a",64),31,"first-clear-fragment"},
+        {"excess-padding", "media", "hls", "aes-128:hls-key_"+strings.Repeat("a",64),48,"short"},
+        {"longer-than-ciphertext", "media", "hls", "aes-128:hls-key_"+strings.Repeat("a",64),16,"first-clear-fragment"},
+        {"signed-key-url", "media", "hls", "aes-128:https://keys.example/key?token=secret",32,"first-clear-fragment"},
+        {"undeciphered-ciphertext", "media", "hls", "aes-128:hls-key_"+strings.Repeat("a",64),32,strings.Repeat("X",32)},
+    }
+    for _,tc:=range cases{t.Run(tc.name,func(t *testing.T){
+        s:=mp05New(t,filepath.Join(t.TempDir(),"store"),4096)
+        id:=mp05Identity(tc.name)
+        id.Protocol=FragmentProtocol(tc.proto)
+        id.Range=&ByteRange{Offset:0,Length:tc.sourceLen}
+        id.EncryptionID=tc.enc
+        if _,err:=s.WriteAndCommitFragment(context.Background(),FragmentRecord{Identity:id,Role:tc.role,AttemptGeneration:1},[]byte(tc.body));!errors.Is(err,ErrInvalidFragment){
+            t.Fatalf("wrong range/privacy bypass accepted: %v",err)
+        }
+        if len(s.CommittedRecords())!=0 {t.Fatal("bypass created committed receipt")}
+    })}
 }
