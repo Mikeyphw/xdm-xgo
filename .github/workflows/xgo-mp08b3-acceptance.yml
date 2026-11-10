@@ -116,7 +116,7 @@ jobs:
           ref: ${{ github.event.pull_request.head.sha || inputs.exact_head_sha }}
           fetch-depth: 0
           persist-credentials: false
-      - name: Refuse missing exact SHA, wrong host or KVM
+      - name: Refuse missing exact SHA or wrong PR provenance
         shell: bash
         env:
           EXPECTED: ${{ github.event.pull_request.head.sha || inputs.exact_head_sha }}
@@ -136,7 +136,35 @@ jobs:
             test "$PR_HEAD_REPO" = "$REPOSITORY"
           fi
           test "$(uname -m)" = x86_64
-          test -r /dev/kvm && test -w /dev/kvm
+      - name: Enable runner KVM for real API36 instrumentation
+        shell: bash
+        run: |
+          set -euo pipefail
+          # The preceding HF02 label run failed before provisioning the emulator.
+          # A readable/writable KVM node is needed. GitHub-hosted nodes can be
+          # owned by root:kvm while the Actions runner lacks KVM group membership.
+          if [[ ! -c /dev/kvm ]]; then
+            echo '::error title=MP08B3 KVM missing::/dev/kvm is not a character device; API36 is NOT qualified.'
+            exit 1
+          fi
+          stat -c 'MP08B3_KVM_NODE mode=%a owner=%U group=%G' /dev/kvm
+          id
+          if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
+            # Least privilege for this disposable runner; no world-readable 0666.
+            sudo chown "$(id -u):$(id -g)" /dev/kvm
+            sudo chmod 0600 /dev/kvm
+          fi
+          test -r /dev/kvm && test -w /dev/kvm || {
+            echo '::error title=MP08B3 KVM permission denied::/dev/kvm cannot be used by this runner.'
+            exit 1
+          }
+          python3 - <<'PY_KVM_OPEN'
+          import os
+          fd = os.open('/dev/kvm', os.O_RDWR | os.O_CLOEXEC)
+          os.close(fd)
+          print('MP08B3_KVM_OPEN_PASS')
+          PY_KVM_OPEN
+          echo 'MP08B3_KVM_ACCESS_READY'
       - uses: actions/setup-java@v4
         with:
           distribution: temurin

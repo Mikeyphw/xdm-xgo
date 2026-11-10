@@ -42,6 +42,8 @@ def workflow_contract(s):
      'test "$(git rev-parse HEAD)" = "$EXPECTED"',
      'test "$BRANCH_SHA" = "$EXPECTED"',
      'test -r /dev/kvm && test -w /dev/kvm',
+     'Enable runner KVM for real API36 instrumentation',
+     'MP08B3_KVM_OPEN_PASS', 'MP08B3_KVM_ACCESS_READY',
      'android-emulator-runner@', 'api-level: 36', 'target: google_apis',
      'arch: x86_64', 'testInstrumentationRunnerArguments.class=com.mikeyphw.xdm.android.MP08B3MediaStoreAcceptanceInstrumentedTest',
      ':app:compileDebugAndroidTestKotlin', 'mp08b3_real_media.py',
@@ -79,6 +81,39 @@ def workflow_contract(s):
  if 'continue-on-error: true' in s or '|| true' in s or 'if-no-files-found: ignore' in s:
   raise AssertionError('MP08B3_SOURCE_REFUSED: silent hosted qualification bypass')
 
+def kvm_bootstrap_contract(s):
+ # Contract based on the actual incident: exact SHA and label evidence must
+ # precede KVM permission setup, which must precede any emulator invocation.
+ require(s, ('Refuse missing exact SHA or wrong PR provenance',
+   'Enable runner KVM for real API36 instrumentation',
+   'MP08B3_KVM_ACCESS_READY', 'MP08B3_KVM_OPEN_PASS'))
+ job=s.split('  api36-real-android:',1)[1].split('  manual-qualification:',1)[0]
+ order=('Refuse missing exact SHA or wrong PR provenance',
+        'Enable runner KVM for real API36 instrumentation',
+        'Provision API36 image and emulator host dependencies',
+        'API36 instrumentation, real MediaStore and required attested FFmpeg/FFprobe')
+ if [job.index(x) for x in order]!=sorted(job.index(x) for x in order):
+  raise AssertionError('MP08B3_SOURCE_REFUSED: KVM bootstrap after emulator')
+ bootstrap=job.split('      - name: Enable runner KVM for real API36 instrumentation',1)[1].split('      - uses: actions/setup-java@v4',1)[0]
+ require(bootstrap, ('set -euo pipefail',
+   'if [[ ! -c /dev/kvm ]]; then',
+   'MP08B3 KVM missing',
+   'if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then',
+   'sudo chown "$(id -u):$(id -g)" /dev/kvm',
+   'sudo chmod 0600 /dev/kvm',
+   'test -r /dev/kvm && test -w /dev/kvm || {',
+   'MP08B3 KVM permission denied',
+   "fd = os.open('/dev/kvm', os.O_RDWR | os.O_CLOEXEC)",
+   'os.close(fd)',
+   "print('MP08B3_KVM_OPEN_PASS')",
+   "echo 'MP08B3_KVM_ACCESS_READY'"))
+ if bootstrap.count('exit 1') < 2:
+  raise AssertionError('MP08B3_SOURCE_REFUSED: must fail closed for missing KVM')
+ if bootstrap.index('test -r /dev/kvm && test -w /dev/kvm') > bootstrap.index('os.open('):
+  raise AssertionError('MP08B3_SOURCE_REFUSED: KVM validation out of order')
+ if 'continue-on-error:' in bootstrap or '|| true' in bootstrap:
+  raise AssertionError('MP08B3_SOURCE_REFUSED: no bypass of KVM readiness')
+
 def host_contract(s):
  require(s, ('testsrc2=size=160x90:rate=10', 'sine=frequency=440:sample_rate=44100',
    "'-map', '0:v:0', '-map', '1:a:0'", "'-c', 'copy'", 
@@ -92,6 +127,7 @@ def host_contract(s):
 class MP08B3Contracts(unittest.TestCase):
  def test_android_real_mediastore_instrumentation(self):android_test_contract(read(ANDROID))
  def test_manual_emulator_gated_and_fail_closed(self):workflow_contract(read(WORKFLOW))
+ def test_kvm_bootstrap_fails_closed(self):kvm_bootstrap_contract(read(WORKFLOW))
  def test_host_real_media_and_negative_cases(self):host_contract(read(HOST))
  def test_prior_production_guards_not_replaced(self):
   for p in ('engine/media/verified_publication.go','engine/runtime/android_mp08_host.go',
@@ -116,6 +152,14 @@ class MP08B3Contracts(unittest.TestCase):
    (workflow_contract,w.replace('github.event.pull_request.head.sha || inputs.exact_head_sha','inputs.exact_head_sha',1)),
    (workflow_contract,w.replace("github.event.label.name == 'xgo-mp08b3-api36'",'true',1)),
    (workflow_contract,w.replace('github.event.pull_request.head.repo.full_name == github.repository','true',1)),
+   (kvm_bootstrap_contract,w.replace('if [[ ! -c /dev/kvm ]]; then','if false; then',1)),
+   (kvm_bootstrap_contract,w.replace('sudo chown "$(id -u):$(id -g)" /dev/kvm','echo bypass-chown',1)),
+   (kvm_bootstrap_contract,w.replace('sudo chmod 0600 /dev/kvm','echo bypass-chmod',1)),
+   (kvm_bootstrap_contract,w.replace("os.open('/dev/kvm', os.O_RDWR | os.O_CLOEXEC)","os.stat('/dev/kvm')",1)),
+   (kvm_bootstrap_contract,w.replace('MP08B3 KVM permission denied','KVM-check-removed',1)),
+   (kvm_bootstrap_contract,w.replace('test -r /dev/kvm && test -w /dev/kvm || {','echo no-permission-gate',1)),
+   (kvm_bootstrap_contract,w.replace('exit 1','echo continued',1)),
+   (kvm_bootstrap_contract,w.replace('Enable runner KVM for real API36 instrumentation','KVM stage removed',1)),
    (workflow_contract,w.replace('test "$EMULATOR" = success','echo emulator-result',1)),
    (workflow_contract,w.replace(':app:compileDebugAndroidTestKotlin',':app:compileDebugKotlin',1)),
    (workflow_contract,w.replace('sudo apt-get update -qq','echo unpinned-media',1)),
