@@ -49,10 +49,22 @@ class Staleness(unittest.TestCase):
     def test_parent_exists_in_actual_repository(self):
         self.assertEqual(subprocess.check_output(['git','rev-parse',PARENT],cwd=REAL,text=True).strip(),PARENT)
     def test_original_xpi_and_hls_parsers_not_modified(self):
-        for path in ('docs/xgo/XGO_XPI_V161_REFERENCE_DIGESTS.json','engine/media/hls_execution.go',
+        for path in ('docs/xgo/XGO_XPI_V161_REFERENCE_DIGESTS.json',
              'engine/media/manifest_resolver.go','engine/media/selection.go',
              'app/XDM.Android/media/src/main/kotlin/com/mikeyphw/xdm/android/media/MediaDownloadPlanner.kt'):
             self.assertEqual(contract(path),committed(path),path)
+    def test_mp05_hls_mutation_requires_actual_durable_sink(self):
+        current=contract('engine/media/hls_execution.go').decode()
+        original=committed('engine/media/hls_execution.go').decode()
+        self.assertIn('artifact := artifactRefForFragment(entry.Identity)',original)
+        self.assertNotIn('artifact := artifactRefForFragment(entry.Identity)',current)
+        for evidence in ('BindDurableStore(store DurableFragmentSink)',
+                         'e.store.WriteAndCommitFragment(ctx,',
+                         'e.store.VerifyCommitted(',
+                         'e.ledger.Commit(receipt)', 'durable_store_required'):
+            self.assertIn(evidence,current)
+        self.assertIn('executeSegment(',current)
+
     def test_no_stale_fixture_inheritance(self):
         for path in ('engine/media/selection_test.go','engine/media/manifest_resolver_test.go'):
             text=committed(path).decode()

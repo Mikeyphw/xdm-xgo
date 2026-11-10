@@ -215,6 +215,7 @@ class AndroidEngineProcessAuthority(context: Context) {
             { (appContext as? AndroidDownloadExecutionBrokerProvider)?.androidDownloadExecutionBrokerOrNull() },
             { (appContext as? AndroidMediaPlatformBrokerProvider)?.androidMediaPlatformBrokerOrNull() },
             AndroidAuthorizedManifestFetcher(appContext),
+            AndroidDurableFragmentStore(appContext),
         )
         framePump = scope.launch {
             while (isActive) {

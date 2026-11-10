@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
-	"crypto/sha256"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -103,8 +102,9 @@ type HLSExecutionResult struct {
 }
 
 type HLSExecutor struct {
-	fetcher HLSFetcher
-	ledger  *FragmentLedger
+    fetcher HLSFetcher
+    ledger *FragmentLedger
+    store DurableFragmentSink
 }
 
 func NewHLSExecutor(fetcher HLSFetcher, ledger *FragmentLedger) (*HLSExecutor, error) {
@@ -122,6 +122,22 @@ func NewHLSExecutor(fetcher HLSFetcher, ledger *FragmentLedger) (*HLSExecutor, e
 }
 
 func (e *HLSExecutor) Ledger() *FragmentLedger { return e.ledger }
+// BindDurableStore is mandatory before real media execution. Rehydrate only
+// read-back-verified receipts, and reject preexisting unverified claims.
+func (e *HLSExecutor) BindDurableStore(store DurableFragmentSink) error {
+    if e==nil||e.ledger==nil||store==nil{return ErrFragmentDurability}
+    for _,r:=range e.ledger.Snapshot(){
+        if r.State==FragmentCommitted && store.VerifyCommitted(r)!=nil{return ErrFragmentDurability}
+    }
+    if snapshots,ok:=store.(interface{CommittedRecords()[]FragmentRecord});ok{
+        for _,r:=range snapshots.CommittedRecords(){
+            if r.Role=="init"{continue}
+            if _,err:=e.ledger.Commit(r);err!=nil{return err}
+        }
+    }
+    e.store=store
+    return nil
+}
 
 func (e *HLSExecutor) Execute(ctx context.Context, plan HLSExecutionPlan) (HLSExecutionResult, error) {
 	if e == nil || e.fetcher == nil || e.ledger == nil {
@@ -162,11 +178,17 @@ func (e *HLSExecutor) Execute(ctx context.Context, plan HLSExecutionPlan) (HLSEx
 			if entry.Historical {
 				continue
 			}
-			if !entry.Redownload {
-				result.Skipped++
-				result.Outcomes = append(result.Outcomes, HLSFragmentOutcome{TimelineKey: entry.Identity.TimelineKey, URI: entry.Segment.ResolvedURI, Status: HLSFragmentSkipped, Reason: "already_committed"})
-				continue
-			}
+            if !entry.Redownload {
+                stored,exists:=e.ledger.Get(entry.Identity)
+                if e.store==nil || !exists || e.store.VerifyCommitted(stored)!=nil {
+                    // Existing records without verified bytes must be re-fetched.
+                    _,_ = e.ledger.MarkCorrupt(entry.Identity,generation,"missing_or_corrupt_stored_bytes")
+                } else {
+                    result.Skipped++
+                    result.Outcomes = append(result.Outcomes, HLSFragmentOutcome{TimelineKey: entry.Identity.TimelineKey, URI: entry.Segment.ResolvedURI, Status: HLSFragmentSkipped, Reason: "already_committed"})
+                    continue
+                }
+            }
 			outcome := e.executeSegment(ctx, entry, generation, plan.CredentialRef)
 			result.Outcomes = append(result.Outcomes, outcome)
 			switch outcome.Status {
@@ -193,8 +215,12 @@ func (e *HLSExecutor) Execute(ctx context.Context, plan HLSExecutionPlan) (HLSEx
 				return result, ErrHLSExecutionStopped
 			}
 		}
-		if playlist.EndList || playlist.PlaylistType == "vod" {
-			result.Status = HLSExecutionCompleted
+        if playlist.EndList || playlist.PlaylistType == "vod" {
+            if result.FetchFailures>0||result.KeyFailures>0||result.DecryptFailures>0||result.Unsupported>0 {
+                result.Status=HLSExecutionFailed
+                return result,nil
+            }
+            result.Status = HLSExecutionCompleted
 			return result, nil
 		}
 	}
@@ -220,9 +246,18 @@ func (e *HLSExecutor) executeSegment(ctx context.Context, entry HLSTimelineEntry
 		_, _ = e.ledger.MarkCorrupt(entry.Identity, generation, ErrHLSUnsupportedProtection.Error()+":"+string(seg.Protection))
 		return out
 	}
-	if seg.Map != nil {
-		_, err := e.fetcher.FetchHLS(ctx, HLSFetchRequest{URI: seg.Map.ResolvedURI, Kind: HLSFetchInitMap, Range: cloneByteRange(seg.Map.Range), CredentialRef: credentialRef})
-		if err != nil {
+    if seg.Map != nil {
+        initBody, err := e.fetcher.FetchHLS(ctx, HLSFetchRequest{URI: seg.Map.ResolvedURI, Kind: HLSFetchInitMap, Range: cloneByteRange(seg.Map.Range), CredentialRef: credentialRef})
+        if err == nil && e.store==nil {err=ErrFragmentDurability}
+        if err == nil {
+            identity:=FragmentIdentity{Protocol:FragmentProtocolHLS,TimelineKey:"init:"+entry.Identity.TimelineKey,
+                ResourceID:entry.Identity.ResourceID+":init-map",Range:cloneByteRange(seg.Map.Range)}
+            initRecord:=FragmentRecord{Identity:identity,Role:"init",AttemptGeneration:generation}
+            var receipt FragmentRecord
+            receipt,err=e.store.WriteAndCommitFragment(ctx,initRecord,initBody.Bytes)
+            if err==nil{err=e.store.VerifyCommitted(receipt)}
+        }
+        if err != nil {
 			out.Status = HLSFragmentFetchFailed
 			out.Reason = "init_map"
 			_, _ = e.ledger.MarkCorrupt(entry.Identity, generation, "init_map_fetch_failed")
@@ -254,18 +289,15 @@ func (e *HLSExecutor) executeSegment(ctx context.Context, entry HLSTimelineEntry
 			return out
 		}
 	}
-	sum := sha256.Sum256(payload)
-	hash := "sha256:" + hex.EncodeToString(sum[:])
-	artifact := artifactRefForFragment(entry.Identity)
-	rec := FragmentRecord{Identity: entry.Identity, Role: "media", State: FragmentCommitted, ExpectedLength: int64(len(payload)), Hash: hash, AttemptGeneration: generation, LocalArtifactRef: artifact, DurableBytesWritten: true}
-	if _, err := e.ledger.Commit(rec); err != nil {
-		out.Status = HLSFragmentFetchFailed
-		out.Reason = err.Error()
-		return out
-	}
-	out.Status = HLSFragmentCommitted
-	out.Hash = hash
-	out.ArtifactRef = artifact
+    if e.store==nil {out.Status=HLSFragmentFetchFailed;out.Reason="durable_store_required";return out}
+    rec:=FragmentRecord{Identity:entry.Identity,Role:"media",AttemptGeneration:generation}
+    receipt,err:=e.store.WriteAndCommitFragment(ctx,rec,payload)
+    if err==nil {err=e.store.VerifyCommitted(receipt)}
+    if err==nil {_,err=e.ledger.Commit(receipt)}
+    if err!=nil {out.Status=HLSFragmentFetchFailed;out.Reason="durable_store_refused";return out}
+    out.Status=HLSFragmentCommitted
+    out.Hash=receipt.Hash
+    out.ArtifactRef=receipt.LocalArtifactRef
 	out.Bytes = len(payload)
 	return out
 }

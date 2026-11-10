@@ -57,11 +57,12 @@ func TestHLSExecutionVODAES128InitMapByteRangeRestart(t *testing.T) {
 	objects["https://cdn.example/vod/all-seg.ts"] = append(append([]byte("0123456789"), seg1...), seg2...)
 	fetcher := newMemoryHLSFetcher(objects)
 	ledger, _ := NewFragmentLedger()
-	exec, err := NewHLSExecutor(fetcher, ledger)
-	if err != nil {
-		t.Fatal(err)
-	}
-	playlist := `#EXTM3U
+    exec, err := NewHLSExecutor(fetcher, ledger)
+    if err != nil { t.Fatal(err) }
+    store,err:=NewFileFragmentStore(t.TempDir(),64<<20)
+    if err!=nil{t.Fatal(err)}
+    if err=exec.BindDurableStore(store);err!=nil{t.Fatal(err)}
+    playlist := `#EXTM3U
 #EXT-X-PLAYLIST-TYPE:VOD
 #EXT-X-MEDIA-SEQUENCE:1
 #EXT-X-MAP:URI="init.mp4",BYTERANGE="4@5"
@@ -103,8 +104,11 @@ func TestHLSExecutionLiveSlidingWindowStopAndUnsupported(t *testing.T) {
 	}
 	fetcher := newMemoryHLSFetcher(objects)
 	ledger, _ := NewFragmentLedger()
-	exec, _ := NewHLSExecutor(fetcher, ledger)
-	p1 := `#EXTM3U
+    exec, _ := NewHLSExecutor(fetcher, ledger)
+    store,err:=NewFileFragmentStore(t.TempDir(),64<<20)
+    if err!=nil{t.Fatal(err)}
+    if err=exec.BindDurableStore(store);err!=nil{t.Fatal(err)}
+    p1 := `#EXTM3U
 #EXT-X-TARGETDURATION:4
 #EXT-X-MEDIA-SEQUENCE:100
 #EXTINF:4,

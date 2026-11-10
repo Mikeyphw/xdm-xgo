@@ -1,6 +1,9 @@
 package media
 
-import "testing"
+import (
+    "strings"
+    "testing"
+)
 
 func TestReconcileHLSTimelineSlidingWindowRetainsCompletedAndAppends(t *testing.T) {
 	old, err := ParseHLSPlaylist("https://cdn.example/live/list.m3u8", `#EXTM3U
@@ -146,4 +149,29 @@ seg10.ts
 	if res.Kind != HLSEvent || len(res.Entries) != 1 || res.Retained != 1 || res.Entries[0].Redownload {
 		t.Fatalf("duplicate refresh not suppressed: %+v", res)
 	}
+}
+
+func TestMP05HLSKeyIdentityDoesNotRetainSignedURL(t *testing.T) {
+    sample:=`#EXTM3U
+#EXT-X-MEDIA-SEQUENCE:1
+#EXT-X-KEY:METHOD=AES-128,URI="https://cdn.example/private/key.bin?token=never-persist"
+#EXTINF:4,
+segment.ts
+#EXT-X-ENDLIST
+`
+    p,err:=ParseHLSPlaylist("https://cdn.example/live/list.m3u8",sample)
+    if err!=nil{t.Fatal(err)}
+    id,err:=HLSTimelineIdentity(p.Segments[0])
+    if err!=nil{t.Fatal(err)}
+    if !strings.HasPrefix(id.EncryptionID,"aes-128:hls-key_") ||
+        strings.Contains(id.EncryptionID,"key.bin") || strings.Contains(id.EncryptionID,"token=") ||
+        strings.Contains(id.EncryptionID,"https://") {
+        t.Fatalf("key locator leaked to durable identity: %q",id.EncryptionID)
+    }
+    next,err:=HLSTimelineIdentity(p.Segments[0])
+    if err!=nil || next.EncryptionID!=id.EncryptionID {t.Fatal("key digest is not stable")}
+    q,err:=ParseHLSPlaylist("https://cdn.example/live/list.m3u8",strings.Replace(sample,"never-persist","rotated",1))
+    if err!=nil{t.Fatal(err)}
+    changed,err:=HLSTimelineIdentity(q.Segments[0])
+    if err!=nil || changed.EncryptionID==id.EncryptionID {t.Fatal("key URL rotation not identity relevant")}
 }
