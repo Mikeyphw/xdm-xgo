@@ -88,7 +88,7 @@ POLICY_TESTS = [
 # is never permission to release/publish or to omit ARM64 physical acceptance.
 RISK_PREFIXES = (
     ".github/workflows/", "scripts/ci/", ".devtool.toml",
-    "app/XDM.Android/app/build.gradle.kts", "app/XDM.Android/gradle/",
+    "app/XDM.Android/build.gradle.kts", "app/XDM.Android/app/build.gradle.kts", "app/XDM.Android/gradle/",
     "app/XDM.Android/browser-extension/src/main/extension/xdm-firefox/handoff.js",
     "app/XDM.Android/app/src/main/kotlin/com/mikeyphw/xdm/android/BrowserCaptureEnvelopeManager.kt",
     "app/XDM.Android/browser-integration/src/main/kotlin/",
@@ -164,7 +164,7 @@ def classify(paths: list[str]) -> dict:
         "groups": sorted(groups) if groups else ["docs"],
         "tests": sorted(tests),
         "needs_android_compile": any(p.startswith(("app/XDM.Android/app/src/", "app/XDM.Android/browser-integration/src/",
-                                                      "app/XDM.Android/app/build.gradle", "app/XDM.Android/gradle/")) for p in paths),
+                                                      "app/XDM.Android/build.gradle", "app/XDM.Android/app/build.gradle", "app/XDM.Android/gradle/")) for p in paths),
         "needs_go": "go" in groups,
         "ci_sensitive": "ci" in groups,
         "high_risk": any(is_risk(p) for p in paths),

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """MP03 integration staleness and unchanged lineage: pinned actual parent bytes."""
 from pathlib import Path
-import json, os, subprocess, unittest
+import json, os, re, subprocess, unittest
 ROOT=Path(__file__).resolve().parents[1]
 PARENT='8471707c742ef991747ece24b7e03f9c8ccd921d'
 ACTUAL=Path(os.environ.get('XGO_MP03_REAL_REPO',ROOT))
@@ -28,6 +28,33 @@ class Staleness(unittest.TestCase):
         self.assertIn('DEFAULT_INTERVAL = 5',p)
         self.assertTrue((ROOT/'.github/workflows/xgo-targeted.yml').is_file())
         self.assertTrue((ROOT/'.github/workflows/xgo-full-gate-router.yml').is_file())
+    def test_android_ci_trigger_contract_not_stale(self):
+        # Path filtering is not used for release-tag or manual Actions events.
+        # Keep a regression for the exact trigger semantics, rather than a
+        # stale demand for two arbitrary YAML path-filter literals.
+        gradle=(ROOT/'app/XDM.Android/build.gradle.kts').read_text()
+        workflow=(ROOT/'.github/workflows/android.yml').read_text()
+        trigger=workflow.split('\non:\n',1)[1].split('\npermissions:',1)[0]
+        self.assertIn('workflow_dispatch:',trigger)
+        self.assertIn("tags: ['android-v*']",trigger)
+        self.assertNotIn('Android CI path filters must include Devtool and the canonical release helper.',gradle)
+        self.assertIn('val ciTriggers = ',gradle)
+        self.assertIn('if (filtered) {',gradle)
+        self.assertIn("Filtered Android CI triggers must include Devtool and the canonical release helper.",gradle)
+        self.assertIn('releaseHelperFile.readText().contains("run-bug-hunt-phase10-release-gate.sh")',gradle)
+        self.assertIn('devtoolConfigFile.readText().contains(',gradle)
+        self.assertIn('external_verification',gradle)
+        policy=(ROOT/'scripts/ci/xgo_ci_policy.py').read_text()
+        self.assertIn('"app/XDM.Android/build.gradle.kts"',policy)
+        self.assertIn('"app/XDM.Android/build.gradle"',policy)
+        self.assertTrue((ROOT/'.devtool.toml').is_file())
+        self.assertTrue((ROOT/'build-release-apk.sh').is_file())
+        # When adding a filtered push/PR trigger later, both tools must be
+        # listed so changes to either artifact rerun mandatory validation.
+        if re.search(r'(?m)^\s{4}paths(-ignore)?:\s*$',trigger):
+            self.assertIn("- '.devtool.toml'",trigger)
+            self.assertIn("- 'build-release-apk.sh'",trigger)
+
     def test_manifest_graph_not_download_authority(self):
         go=(ROOT/'engine/media/manifest_resolver.go').read_text()
         self.assertIn('DownloadReady: false',go)

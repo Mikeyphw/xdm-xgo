@@ -121,8 +121,18 @@ val verifyStableToolchainBaseline = tasks.register("verifyStableToolchainBaselin
         require(ciWorkflow.contains("XDM_ANDROID_NDK_VERSION: '29.0.14206865'")) {
             "Android CI must pin NDK 29.0.14206865."
         }
-        require(ciWorkflow.contains("- '.devtool.toml'") && ciWorkflow.contains("- 'build-release-apk.sh'")) {
-            "Android CI path filters must include Devtool and the canonical release helper."
+        // XDM Android CI is manually dispatched or triggered by release tags.
+        // Tag triggers do not use path filters. Check their actual contract, and
+        // only require Devtool/helper filter paths if path filtering is introduced.
+        val ciTriggers = ciWorkflow.substringBefore("\npermissions:").substringAfter("\non:\n", "")
+        require(ciTriggers.contains("workflow_dispatch:") && ciTriggers.contains("tags: ['android-v*']")) {
+            "Android CI must keep manual dispatch and signed release-tag triggers."
+        }
+        val filtered = Regex("(?m)^\\s{4}paths(-ignore)?:\\s*$").containsMatchIn(ciTriggers)
+        if (filtered) {
+            require(ciTriggers.contains("- '.devtool.toml'") && ciTriggers.contains("- 'build-release-apk.sh'")) {
+                "Filtered Android CI triggers must include Devtool and the canonical release helper."
+            }
         }
         require(releaseHelperFile.readText().contains("run-bug-hunt-phase10-release-gate.sh")) {
             "The advertised release helper must execute the canonical signed-release gate."
