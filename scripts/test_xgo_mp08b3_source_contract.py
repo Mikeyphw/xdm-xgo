@@ -114,6 +114,82 @@ def kvm_bootstrap_contract(s):
  if 'continue-on-error:' in bootstrap or '|| true' in bootstrap:
   raise AssertionError('MP08B3_SOURCE_REFUSED: no bypass of KVM readiness')
 
+def api36_execution_contract(s):
+ # Triggered by real HF03 incident 42893899222: emulator boots, runner
+ # invokes `sh -c`, and bare `set -euo pipefail` fails before Gradle.
+ job = s.split('  api36-real-android:', 1)[1].split('  manual-qualification:', 1)[0]
+ name = '      - name: API36 instrumentation, real MediaStore and required attested FFmpeg/FFprobe'
+ if job.count(name) != 1: raise AssertionError('MP08B3_API36_REFUSED: missing action')
+ stage = job.split(name, 1)[1]
+ if stage.count('          script: |\n') != 1:
+  raise AssertionError('MP08B3_API36_REFUSED: inline script anchor changed')
+ raw = stage.split('          script: |\n', 1)[1]
+ if any(line.strip() and not line.startswith('            ') for line in raw.splitlines()):
+  raise AssertionError('MP08B3_API36_REFUSED: malformed YAML script indentation')
+ script = '\n'.join(line[12:] for line in raw.splitlines()) + '\n'
+ require(script, ("bash -euo pipefail <<'MP08B3_API36_BASH'",
+   'MP08B3_API36_BASH\n', 'set -euo pipefail',
+   "test \"$(adb shell getprop ro.build.version.sdk | tr -d '\\r')\" = 36",
+   "test \"$(adb shell getprop ro.kernel.qemu | tr -d '\\r')\" = 1",
+   'rm -rf app/build/outputs/androidTest-results/connected',
+   ':app:connectedDebugAndroidTest',
+   '-Pandroid.testInstrumentationRunnerArguments.class=com.mikeyphw.xdm.android.MP08B3MediaStoreAcceptanceInstrumentedTest',
+   "python3 - <<'MP08B3_API36_JUNIT'",
+   'MP08B3_API36_JUNIT\n',
+   'xml.etree.ElementTree as ET',
+   "root.rglob('*.xml')", "klass == suffix", 'len(names) != 4',
+   'set(names) != expected', "('failure','error','skipped')",
+   'MP08B3_API36_FOUR_REAL_INSTRUMENTATION_TESTS_PASS'))
+ if script.splitlines()[3] != "bash -euo pipefail <<'MP08B3_API36_BASH'":
+  raise AssertionError('MP08B3_API36_REFUSED: sh must launch Bash before pipefail')
+ if script.count('MP08B3_API36_BASH') != 2 or script.count('MP08B3_API36_JUNIT') != 2:
+  raise AssertionError('MP08B3_API36_REFUSED: unbalanced heredoc markers')
+ if script.index('rm -rf app/build/outputs/androidTest-results/connected') > script.index('./gradlew'):
+  raise AssertionError('MP08B3_API36_REFUSED: stale instrumentation receipt could be reused')
+ if script.index('./gradlew') > script.index('python3 - <<'):
+  raise AssertionError('MP08B3_API36_REFUSED: evidence read before Gradle tests')
+ if any(marker in script for marker in ('|| true', 'continue-on-error:', 'Assume.', '@Ignore', 'pytest.skip')):
+  raise AssertionError('MP08B3_API36_REFUSED: acceptance bypass')
+ # Runs without Android, but under the EXACT POSIX shell used by emulator-runner.
+ # No dependency on YAML parser or native emulator for this stage contract.
+ import subprocess
+ parsed = subprocess.run(['/bin/sh','-n','-c',script], capture_output=True, text=True)
+ if parsed.returncode:
+  raise AssertionError('MP08B3_API36_REFUSED: sh script parse failed: '+parsed.stderr)
+ return script
+
+def execute_api36_mock(script, *, api='36', qemu='1', suite='pass', gradle_rc=0):
+ import tempfile, subprocess, os, stat, html
+ from pathlib import Path
+ with tempfile.TemporaryDirectory(prefix='mp08b3-api36-shell-') as t:
+  root=Path(t); bin=root/'bin'; bin.mkdir()
+  adb=bin/'adb'
+  adb.write_text('#!/bin/sh\ncase "$*" in\n'
+   '"shell getprop ro.build.version.sdk") echo "'+api+'" ;;\n'
+   '"shell getprop ro.kernel.qemu") echo "'+qemu+'" ;;\n'
+   '*) exit 22 ;;\nesac\n', encoding='utf-8')
+  adb.chmod(0o755)
+  android=root/'app/XDM.Android'; android.mkdir(parents=True)
+  gradle=android/'gradlew'
+  tests=['b3_01RealMediaStorePublicationReadbackAndIdempotency',
+   'b3_02NoAuthorizationAndCorruptedCandidateFailClosed',
+   'b3_03InterruptedPendingMediaStoreRowIsReconciled',
+   'b3_04RealEmbeddedFfmpegProbeMuxAndMediaStoreRoundTrip']
+  kind=tests if suite not in ('missing','three','wrong') else tests[:3]
+  if suite=='wrong':kind=tests[:3]+['unrelated_nonreal_test']
+  if suite=='duplicate':kind=tests+[tests[0]]
+  xml='<testsuite>'+''.join('<testcase classname="com.mikeyphw.xdm.android.MP08B3MediaStoreAcceptanceInstrumentedTest" name="'+html.escape(n,quote=True)+'">'+(
+   '<skipped/>' if suite=='skipped' and i==0 else '<failure/>' if suite=='fail' and i==0 else '')+'</testcase>' for i,n in enumerate(kind))+'</testsuite>'
+  gradle.write_text('#!/bin/sh\n[ "$#" -ge 3 ] || exit 99\n'
+   'case "$*" in *:app:connectedDebugAndroidTest*) ;; *) exit 98 ;; esac\n'
+   'case "$*" in *testInstrumentationRunnerArguments.class=com.mikeyphw.xdm.android.MP08B3MediaStoreAcceptanceInstrumentedTest*) ;; *) exit 97 ;; esac\n'
+   'mkdir -p app/build/outputs/androidTest-results/connected\n'
+   + ('printf %s '+repr(xml)+ ' > app/build/outputs/androidTest-results/connected/TEST-mock.xml\n' if suite!='missing' else '')
+   +'exit '+str(gradle_rc)+'\n',encoding='utf-8')
+  gradle.chmod(0o755)
+  env={**os.environ,'PATH':str(bin)+os.pathsep+os.environ.get('PATH',''),'TMPDIR':str(root)}
+  return subprocess.run(['/bin/sh','-c',script],cwd=root,env=env,capture_output=True,text=True,timeout=15)
+
 def host_contract(s):
  require(s, ('testsrc2=size=160x90:rate=10', 'sine=frequency=440:sample_rate=44100',
    "'-map', '0:v:0', '-map', '1:a:0'", "'-c', 'copy'", 
@@ -128,6 +204,21 @@ class MP08B3Contracts(unittest.TestCase):
  def test_android_real_mediastore_instrumentation(self):android_test_contract(read(ANDROID))
  def test_manual_emulator_gated_and_fail_closed(self):workflow_contract(read(WORKFLOW))
  def test_kvm_bootstrap_fails_closed(self):kvm_bootstrap_contract(read(WORKFLOW))
+ def test_api36_real_posix_sh_launch_and_mocked_junit_receipts(self):
+  script=api36_execution_contract(read(WORKFLOW))
+  p=execute_api36_mock(script)
+  self.assertEqual(p.returncode,0, (p.stdout,p.stderr))
+  self.assertIn('MP08B3_API36_FOUR_REAL_INSTRUMENTATION_TESTS_PASS',p.stdout)
+  for scenario in ('missing','three','wrong','duplicate','skipped','fail'):
+   with self.subTest(scenario=scenario):
+    bad=execute_api36_mock(script,suite=scenario)
+    self.assertNotEqual(bad.returncode,0, (bad.stdout,bad.stderr))
+    self.assertNotIn('MP08B3_API36_FOUR_REAL_INSTRUMENTATION_TESTS_PASS',bad.stdout)
+  for settings in ({'api':'35'},{'qemu':'0'},{'gradle_rc':1}):
+   with self.subTest(settings=settings):
+    bad=execute_api36_mock(script,**settings)
+    self.assertNotEqual(bad.returncode,0,(bad.stdout,bad.stderr))
+    self.assertNotIn('MP08B3_API36_FOUR_REAL_INSTRUMENTATION_TESTS_PASS',bad.stdout)
  def test_host_real_media_and_negative_cases(self):host_contract(read(HOST))
  def test_prior_production_guards_not_replaced(self):
   for p in ('engine/media/verified_publication.go','engine/runtime/android_mp08_host.go',
@@ -160,6 +251,13 @@ class MP08B3Contracts(unittest.TestCase):
    (kvm_bootstrap_contract,w.replace('test -r /dev/kvm && test -w /dev/kvm || {','echo no-permission-gate',1)),
    (kvm_bootstrap_contract,w.replace('exit 1','echo continued',1)),
    (kvm_bootstrap_contract,w.replace('Enable runner KVM for real API36 instrumentation','KVM stage removed',1)),
+   (api36_execution_contract,w.replace("bash -euo pipefail <<'MP08B3_API36_BASH'",'set -euo pipefail',1)),
+   (api36_execution_contract,w.replace('MP08B3_API36_FOUR_REAL_INSTRUMENTATION_TESTS_PASS','forged green',1)),
+   (api36_execution_contract,w.replace('len(names) != 4','len(names) < 1',1)),
+   (api36_execution_contract,w.replace('set(names) != expected','False',1)),
+   (api36_execution_contract,w.replace("('failure','error','skipped')","('failure',)",1)),
+   (api36_execution_contract,w.replace('rm -rf app/build/outputs/androidTest-results/connected','echo stale-allowed',1)),
+   (api36_execution_contract,w.replace(':app:connectedDebugAndroidTest',':app:compileDebugAndroidTestKotlin',1)),
    (workflow_contract,w.replace('test "$EMULATOR" = success','echo emulator-result',1)),
    (workflow_contract,w.replace(':app:compileDebugAndroidTestKotlin',':app:compileDebugKotlin',1)),
    (workflow_contract,w.replace('sudo apt-get update -qq','echo unpinned-media',1)),

@@ -188,14 +188,54 @@ jobs:
           disable-animations: true
           emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           script: |
+            # The emulator-runner action launches this script with /usr/bin/sh.
+            # Execute strict Bash explicitly; a Bash shebang or bare `set -o
+            # pipefail` here is NOT enough when passed as `sh -c` input.
+            bash -euo pipefail <<'MP08B3_API36_BASH'
             set -euo pipefail
             test "$(adb shell getprop ro.build.version.sdk | tr -d '\r')" = 36
             test "$(adb shell getprop ro.kernel.qemu | tr -d '\r')" = 1
             cd app/XDM.Android
-            # The test itself REQUIRES a qualified packaged FFmpeg/FFprobe runtime.
-            # ABI mismatch or missing runtime is a failure, not a skipped test.
+            # Erase only the fixed connected-test result directory to reject
+            # stale JUnit evidence from a previous runner invocation.
+            rm -rf app/build/outputs/androidTest-results/connected
+            # The test REQUIRES an attested packaged FFmpeg/FFprobe runtime;
+            # missing ABI or runtime is a failing instrumentation test.
             ./gradlew --no-daemon --max-workers=2 :app:connectedDebugAndroidTest \
               -Pandroid.testInstrumentationRunnerArguments.class=com.mikeyphw.xdm.android.MP08B3MediaStoreAcceptanceInstrumentedTest
+            python3 - <<'MP08B3_API36_JUNIT'
+            from pathlib import Path
+            import xml.etree.ElementTree as ET
+            root = Path('app/build/outputs/androidTest-results/connected')
+            expected = {
+                'b3_01RealMediaStorePublicationReadbackAndIdempotency',
+                'b3_02NoAuthorizationAndCorruptedCandidateFailClosed',
+                'b3_03InterruptedPendingMediaStoreRowIsReconciled',
+                'b3_04RealEmbeddedFfmpegProbeMuxAndMediaStoreRoundTrip',
+            }
+            suffix = 'com.mikeyphw.xdm.android.MP08B3MediaStoreAcceptanceInstrumentedTest'
+            docs = sorted(root.rglob('*.xml')) if root.is_dir() else []
+            if not docs:
+                raise SystemExit('MP08B3_API36_REFUSED: missing fresh instrumentation JUnit XML')
+            matches = []
+            for doc in docs:
+                try:
+                    report = ET.parse(doc)
+                except ET.ParseError as exc:
+                    raise SystemExit(f'MP08B3_API36_REFUSED: malformed JUnit report: {doc.name}') from exc
+                for case in report.findall('.//testcase'):
+                    klass = case.get('classname', '')
+                    if klass == suffix:
+                        matches.append(case)
+            names = [c.get('name') for c in matches]
+            if len(names) != 4 or set(names) != expected:
+                raise SystemExit('MP08B3_API36_REFUSED: four unique actual instrumentation tests required; observed ' + repr(names))
+            for case in matches:
+                if any(case.find(tag) is not None for tag in ('failure','error','skipped')):
+                    raise SystemExit('MP08B3_API36_REFUSED: failed, errored or skipped instrumentation test ' + str(case.get('name')))
+            print('MP08B3_API36_FOUR_REAL_INSTRUMENTATION_TESTS_PASS')
+            MP08B3_API36_JUNIT
+            MP08B3_API36_BASH
   manual-qualification:
     name: Explicit opt-in emulator gate — never green when skipped
     if: >-
