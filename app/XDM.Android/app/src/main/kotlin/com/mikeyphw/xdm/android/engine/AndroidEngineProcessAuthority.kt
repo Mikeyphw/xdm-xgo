@@ -129,13 +129,14 @@ class AndroidEngineProcessAuthority(context: Context) {
     }
 
     suspend fun submitMediaUiCommand(kind: String, payload: JSONObject): AndroidMediaUiCommandResult {
-        require(kind in setOf("android.media.capture", "android.media.select", "android.media.execute")) { "unsupported Android media command kind" }
+        require(kind in setOf("android.media.capture", "android.media.select", "android.media.execute", "android.media.resolve_manifest")) { "unsupported Android media command kind" }
         val requestId = payload.optString("client_request_id").takeIf(String::isNotBlank)
             ?: "media-ui-${uiCommandSequence.getAndIncrement()}"
         val commandPayload = JSONObject(payload.toString()).put("client_request_id", requestId)
         val action = when (kind) {
             "android.media.capture" -> "capture"
             "android.media.select" -> "select"
+            "android.media.resolve_manifest" -> "resolve_manifest"
             else -> "execute"
         }
         val currentBridge = synchronized(this) {
@@ -159,7 +160,7 @@ class AndroidEngineProcessAuthority(context: Context) {
         check(pendingMediaCommands.putIfAbsent(requestId, deferred) == null) { "duplicate Android media UI request id" }
         return try {
             currentBridge.command(uiCommand(kind, commandPayload, "media-ui:$requestId"))
-            withTimeout(UI_COMMAND_TIMEOUT_MS) { deferred.await() }
+            withTimeout(if (kind == "android.media.resolve_manifest") 90_000L else UI_COMMAND_TIMEOUT_MS) { deferred.await() }
         } catch (error: Throwable) {
             pendingMediaCommands.remove(requestId)
             AndroidMediaUiCommandResult(requestId, action, false, errorCode = "engine_disconnected", message = error.message ?: "Go media command failed")
@@ -213,6 +214,7 @@ class AndroidEngineProcessAuthority(context: Context) {
             AndroidNetworkPolicyBroker(appContext),
             { (appContext as? AndroidDownloadExecutionBrokerProvider)?.androidDownloadExecutionBrokerOrNull() },
             { (appContext as? AndroidMediaPlatformBrokerProvider)?.androidMediaPlatformBrokerOrNull() },
+            AndroidAuthorizedManifestFetcher(appContext),
         )
         framePump = scope.launch {
             while (isActive) {

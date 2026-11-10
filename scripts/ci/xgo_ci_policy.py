@@ -73,6 +73,12 @@ MODERN_SOURCE_TESTS = [
     "app/XDM/eng/validate-xfe01-single-firefox-extension.py",
     "app/XDM/eng/rem18-release-matrix-audit.py",
 ]
+MP03_PYTHON = [
+    "scripts/test_xgo_mp03_source_contract.py",
+    "scripts/test_xgo_mp03_staleness_contract.py",
+    "scripts/test_xgo_mp03_android_e2e_contract.py",
+    "scripts/test_xgo_mp03_android_staleness.py",
+]
 POLICY_TESTS = [
     "scripts/ci/test_xgo_ci_policy.py",
     "scripts/test_xgo_mp01_hf04_ci_tiers.py",
@@ -147,6 +153,8 @@ def classify(paths: list[str]) -> dict:
     if groups & {"extension", "media", "ci"}:
         tests.update(EXTENSION_TESTS)
         tests.update(EXTENSION_PYTHON)
+    if groups & {"go", "android", "ci"}:
+        tests.update(MP03_PYTHON)
     if groups & {"android", "ci"}:
         tests.update(ANDROID_SOURCE_TESTS)
         tests.add("app/XDM.Android/tools/validate-xar10-browser-capture-evidence.py")

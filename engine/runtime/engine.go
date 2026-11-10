@@ -141,6 +141,7 @@ func New(config Config) *Engine {
 	e.handlers[AndroidMediaCaptureKind] = e.androidMediaCaptureHandler
 	e.handlers[AndroidMediaSelectKind] = e.androidMediaSelectHandler
 	e.handlers[AndroidMediaExecuteKind] = e.androidMediaExecuteHandler
+	e.handlers[AndroidMediaResolveKind] = e.androidMediaResolveHandler
 	e.handlers[AndroidLegacyRoomImportKind] = e.androidLegacyRoomImportHandler
 	e.handlers[DesktopPublicationCommitKind] = e.desktopPublicationCommitHandler
 	e.handlers[DesktopSystemProxyKind] = e.desktopSystemProxyHandler

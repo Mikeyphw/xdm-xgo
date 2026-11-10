@@ -15,6 +15,7 @@ class AndroidPlatformRequestDispatcher(
     private val network: AndroidNetworkPolicyBroker,
     private val downloadUiBroker: () -> AndroidDownloadExecutionBroker?,
     private val mediaBroker: () -> AndroidMediaPlatformBroker?,
+    private val manifestFetcher: AndroidAuthorizedManifestFetcher,
 ) {
     private val mediaToolScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -26,6 +27,15 @@ class AndroidPlatformRequestDispatcher(
         val session = request.optLong("session", 0L)
         if (requestId <= 0L || session <= 0L) return false
         val payload = request.optJSONObject("payload") ?: JSONObject()
+        if (request.optString("kind") == "manifest_fetch") {
+            // The same non-blocking JNI pump serves each bounded manifest fetch.
+            mediaToolScope.launch {
+                val reply = runCatching { manifestFetchReply(requestId, session, payload) }
+                    .getOrElse { errorReply(requestId, session, "manifest_fetch_failed") }
+                runCatching { bridge.platformReply(reply.toString().toByteArray(Charsets.UTF_8)) }
+            }
+            return true
+        }
         if (request.optString("kind") == "external_media_tool") {
             val broker = mediaBroker() ?: run {
                 bridge.platformReply(errorReply(requestId, session, "media_broker_unavailable").toString().toByteArray(Charsets.UTF_8))
@@ -116,6 +126,14 @@ class AndroidPlatformRequestDispatcher(
         }
     }
 
+
+    private suspend fun manifestFetchReply(requestId: Long, session: Long, payload: JSONObject): JSONObject {
+        val result = manifestFetcher.fetch(payload)
+        if (result.optBoolean("ok", true) == false) {
+            return errorReply(requestId, session, result.optString("error_code", "manifest_fetch_refused"))
+        }
+        return successReply(requestId, session, result)
+    }
 
     private suspend fun mediaToolReply(requestId: Long, session: Long, payload: JSONObject, broker: AndroidMediaPlatformBroker): JSONObject {
         val result = runCatching { broker.execute(payload) }

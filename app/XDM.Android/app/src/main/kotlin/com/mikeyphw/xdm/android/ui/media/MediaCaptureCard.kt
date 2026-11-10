@@ -55,6 +55,7 @@ internal fun MediaCaptureCard(
     onOpenOutput: (MediaOutputRecord) -> Unit,
     onCancelEmbeddedFfmpeg: (MediaOutputRecord) -> Unit,
     onResolve: (MediaCaptureRecord) -> Unit,
+    onInspectManifest: (MediaCaptureRecord) -> Unit,
     onSelectVariant: (MediaCaptureRecord, String) -> Unit,
     onTrackSelectionChanged: (MediaCaptureRecord, MediaTrackSelection) -> Unit,
     onRemove: (MediaCaptureRecord) -> Unit,
@@ -226,6 +227,10 @@ internal fun MediaCaptureCard(
             }
             if (summary.state != MediaConsumerState.Protected) {
                 TextButton(onClick = { detailsVisible = true }) { Text("Edit") }
+            }
+            // Read-only Go graph discovery; doesn't bypass or replace Kotlin HLS.
+            if (capture.isPlaylist) {
+                TextButton(onClick = { onInspectManifest(capture) }) { Text("Inspect Go manifest") }
             }
             TextButton(onClick = { removeConfirmVisible = true }) { Text("Remove") }
         }
