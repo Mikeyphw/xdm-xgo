@@ -30,6 +30,15 @@ class TargetTests(unittest.TestCase):
         self.assertTrue(plan["needs_android_compile"])
         self.assertIn("scripts/test_xgo_mp01_hf07_emulator_contract.py", plan["tests"])
 
+    def test_mp06_hls_source_and_android_compile_route_to_real_contracts(self):
+        plan = policy.classify(["engine/media/hls_vod_session.go", "app/XDM.Android/media/src/main/kotlin/NativeHlsExecutionEngine.kt"])
+        self.assertTrue(plan["needs_go"])
+        # MP06's production Kotlin contract lives in the :media module;
+        # Kotlin-only edits must trigger an Android compile too.
+        self.assertTrue(plan["needs_android_compile"])
+        self.assertIn("scripts/test_xgo_mp06_source_contract.py", plan["tests"])
+        self.assertIn("scripts/test_xgo_mp06_staleness_audit.py", plan["tests"])
+
     def test_go_not_desktop_or_android(self):
         plan = policy.classify(["engine/media/graph.go"])
         self.assertTrue(plan["needs_go"])
