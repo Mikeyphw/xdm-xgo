@@ -216,6 +216,10 @@ class AndroidEngineProcessAuthority(context: Context) {
             { (appContext as? AndroidMediaPlatformBrokerProvider)?.androidMediaPlatformBrokerOrNull() },
             AndroidAuthorizedManifestFetcher(appContext),
             AndroidDurableFragmentStore(appContext),
+            AndroidMP08VerifiedStageBroker(
+                appContext,
+                com.mikeyphw.xdm.android.media.ffmpeg.EmbeddedFfmpegRuntime(appContext),
+            ),
         )
         framePump = scope.launch {
             while (isActive) {

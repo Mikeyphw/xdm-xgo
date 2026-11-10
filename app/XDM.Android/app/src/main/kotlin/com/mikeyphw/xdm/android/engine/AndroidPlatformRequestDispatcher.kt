@@ -17,6 +17,7 @@ internal class AndroidPlatformRequestDispatcher(
     private val mediaBroker: () -> AndroidMediaPlatformBroker?,
     private val manifestFetcher: AndroidAuthorizedManifestFetcher,
     private val fragmentStore: AndroidDurableFragmentStore,
+    private val mp08Broker: AndroidMP08VerifiedStageBroker,
 ) {
     private val mediaToolScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -28,6 +29,16 @@ internal class AndroidPlatformRequestDispatcher(
         val session = request.optLong("session", 0L)
         if (requestId <= 0L || session <= 0L) return false
         val payload = request.optJSONObject("payload") ?: JSONObject()
+        if (request.optString("kind") == "mp08_finalization") {
+            // MP08B1 is a private staging port only. It never returns DownloadReady.
+            // Keep FFmpeg off the JNI frame-pump dispatcher thread.
+            mediaToolScope.launch {
+                val reply = runCatching { mp08FinalizationReply(requestId, session, payload) }
+                    .getOrElse { errorReply(requestId, session, "mp08_stage_failed") }
+                runCatching { bridge.platformReply(reply.toString().toByteArray(Charsets.UTF_8)) }
+            }
+            return true
+        }
         if (request.optString("kind") == "android_fragment_store") {
             mediaToolScope.launch {
                 val reply = runCatching { fragmentStoreReply(requestId, session, payload) }
@@ -135,6 +146,15 @@ internal class AndroidPlatformRequestDispatcher(
         }
     }
 
+
+    private suspend fun mp08FinalizationReply(requestId: Long, session: Long, payload: JSONObject): JSONObject {
+        val result = mp08Broker.execute(payload)
+        return if (result.optBoolean("ok", false) && !result.optBoolean("download_ready", true)) {
+            successReply(requestId, session, result)
+        } else {
+            errorReply(requestId, session, result.optString("error_code", "mp08_finalization_refused"))
+        }
+    }
 
     private fun fragmentStoreReply(requestId: Long, session: Long, payload: JSONObject): JSONObject {
         val result = fragmentStore.execute(payload)
