@@ -14,21 +14,21 @@ CANONICAL = ROOT / "app/XDM.Android/browser-extension/src/main/extension/xdm-fir
 CANONICAL_ID = "xdm-android-media-bridge@mikeyphw"
 EXPECTED_HASHES = {
     "bridge-selftest.js": "7c442bee5be87e6802e9f82f6fcca88daede13377fbbd70dd6e85216b0022eb6",
-    "candidate-store.js": "48fad2274ff84fed18c1164ec18dc81cee3d0d63471d09c49257ec16f55cc10a",
-    "detector-core.js": "2781fadd685735072f1fddbed12c55e7cc83cf75ed719a3ae262f8ff481bb130",
+    "candidate-store.js": "21bd82e82b66bcdd521e14e349c65f3b26672ca7e9e7c5cba341d67fbc621d19",
+    "detector-core.js": "071e2680bbf07c6be7841ad613c68043eec7427dbde36e32b5092d85f4e8bd65",
     "extension.css": "5f9d10da55bea57317d0f01db7a3a06ad4c4a196201a942027e25e751b6d4fcf",
-    "fab.js": "c08b13e5a04ad29ec8df80722a653cb37145aa4605d27a317d102dd37ae92fe8",
-    "frame-bridge.js": "06c45a4fea9d098cbd446bd5c98bb69a7c2ccd7047526b8d5fabcb13cf507fa9",
+    "fab.js": "42e44f689030d06687a651962c6306d0be58cb1bdfb6301e4038b8e52c2d286a",
+    "frame-bridge.js": "e15b181cc1e87ff00d00855ac6f19b1fa8f893809abc2044df461d5f80a4f046",
     "generated-config.template.js": "0cd67c0565d9a1d94c2d8b0efe0e14e9c29565c926babe90208e07b7dac40033",
     "generated-theme.template.css": "b52a7938b8df6faf687e81f0a39899acf2fa89ff19a3d21b6a8508602acef735",
     "handoff.js": "23b649b98c6b3cbb4fbaa345d2cd654bbdfd6af40ab03eb54a64acfdcc20578e",
     "icons/icon48.png": "1ffad2f3f3e18ce0558fb506deb38c600f1747bb0dc0a5b1ad8c7ea448d8373b",
     "icons/icon96.png": "0f442e4f1c9075c0d8bdbe20a71102fa13bb6e603770010e78e1a87c27a7aa2f",
     "manifest.template.json": "e823a9405bfbbbcdffebefa06ae380ce783c0344e1ade80e6239893c01b47683",
-    "network-observer.js": "41d318bd5fde016f9b1f052714d747e88160a996dcfdb96fb6c69fd8a8df87de",
+    "network-observer.js": "c4b5280649c228d138c25ea22beec597c63b0ffdd09a826261d3d5feb7ad150e",
     "page-sniffer.js": "165ca7e2c610b3358b588d6c956ceb773a39d8b81d535a6aaf5f89ec4f74e63a",
     "popup.html": "d0eb8c568390257d470ff09bd61df1e385ebb36401f77bf8883408c26b9e4c31",
-    "popup.js": "09741ec7d3b31eafdda8bc12e89471bb9d0602dcd570fc10a09d562b4b899e57",
+    "popup.js": "37b23978c3a5f786991b8f6bfac6f0e8fae17dcb056e62b54f230e059e615274",
 }
 
 

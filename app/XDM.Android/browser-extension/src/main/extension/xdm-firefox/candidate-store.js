@@ -3,6 +3,8 @@
   if (!CORE || globalThis.XdmCandidateStoreV1) return;
 
   const MAX_EVIDENCE_PER_TAB = 384;
+  const MAX_ALIASES_PER_TAB = 512;
+  const MAX_SAFE_MANIFEST_CHARS = 786432;
 
 
 
@@ -91,11 +93,19 @@
       const compositeKey = evidenceKey(candidate, exact);
       // XAR10: privileged evidence is keyed by exact URL + requestId + frame + generation,
       // never by a single exact-URL slot that a parallel same-URL request can overwrite.
-      if (exact && compositeKey) evidence.set(compositeKey, Object.assign({}, candidate, {
-        exactRequestUrl: exact,
-        evidenceKey: compositeKey,
-        at: Date.now(),
-      }));
+      if (exact && compositeKey) {
+        // Page-world hints may re-enrich metadata but cannot renew the time of a
+        // privileged response or keep expired credentials alive indefinitely.
+        const prior = evidence.get(compositeKey);
+        const record = Object.assign({}, candidate);
+        delete record.manifestText; // Never retain a 768 KiB body per request in the evidence cache.
+        delete record.bodyExcerpt;
+        evidence.set(compositeKey, Object.assign(record, {
+          exactRequestUrl: exact,
+          evidenceKey: compositeKey,
+          at: prior ? prior.at : Date.now(),
+        }));
+      }
       while (evidence.size > MAX_EVIDENCE_PER_TAB) evidence.delete(evidence.keys().next().value);
       this.evidence.set(key, evidence);
     }
@@ -118,6 +128,42 @@
       return matches.length ? cloneCandidate(matches[0]) : null;
     }
 
+    recentManifestEvidence(tabId, frameId, maxAgeMs = 12000) {
+      this.trim(tabId);
+      const evidence = this.evidence.get(Number(tabId)) || new Map();
+      const now = Date.now(), frame = evidenceFrameId({frameId});
+      const candidates = new Map();
+      for (const proof of evidence.values()) {
+        // HTTP MIME is privileged response evidence; a page-supplied body isn't.
+        const mime = CORE.normalizeMime(proof.contentType);
+        const MIMEproof = CORE.isManifest("", mime) ||
+          ((mime.startsWith("video/") || mime.startsWith("audio/")) &&
+           (proof.requestType === "media" || Number(proof.confidence || 0) >= 930));
+        if (proof.source !== "webRequest" || !proof.requestId || !MIMEproof ||
+            evidenceFrameId(proof) !== frame ||
+            now - Number(proof.at || 0) > maxAgeMs || now < Number(proof.at || 0)) continue;
+        const rawId = CORE.stableMediaIdentity(proof.url);
+        if (!rawId) continue;
+        // An HLS master and observed child variants are distinct exact HTTP
+        // requests but one logical playback. Reuse the STORE'S OWN frame-
+        // scoped aliases: never collapse two unrelated streams in a frame.
+        const key = this.rootIdentity(Number(tabId), scopedMediaId(rawId, frame));
+        const logical = (this.buckets.get(Number(tabId)) || new Map()).get(key);
+        if (!logical) continue; // retired document or expired logical row
+        const rootMatch = CORE.stableMediaIdentity(logical.url) === rawId;
+        const prior = candidates.get(key);
+        if (!prior || (rootMatch && !prior.rootMatch) ||
+            (rootMatch === prior.rootMatch && Number(prior.proof.at || 0) < Number(proof.at || 0))) {
+          candidates.set(key, {proof, rootMatch});
+        }
+      }
+      // Never guess among two streams in the same iframe. Keep exact headers
+      // and source generation out of this read-only correlation decision.
+      return [...candidates.values()].map(item => item.proof)
+        .sort((a,b)=>Number(b.at||0)-Number(a.at||0))
+        .slice(0, 3).map(proof => cloneCandidate(proof));
+    }
+
     clearDocumentEvidence(tabId, frameId = null) {
       const key = Number(tabId);
       const evidence = this.evidence.get(key);
@@ -138,6 +184,7 @@
       const child = this.rootIdentity(key, childId);
       if (!root || !child || root === child) return;
       aliases.set(child, root);
+      while (aliases.size > MAX_ALIASES_PER_TAB) aliases.delete(aliases.keys().next().value);
       const childItem = bucket.get(child);
       const rootItem = bucket.get(root);
       if (childItem && rootItem) {
@@ -167,8 +214,6 @@
 
       const url = CORE.resolveUrl(candidate.url, candidate.baseUrl);
       if (!url || CORE.isLikelyAd(url)) return false;
-      const evidenceCandidate = Object.assign({}, candidate, { url });
-      this.rememberEvidence(numericTabId, evidenceCandidate);
       if (CORE.isLikelySegment(url)) {
         stats.suppressedSegments += 1;
         const parentId = scopedMediaId(candidate.parentStableMediaId || (candidate.parentManifestUrl && CORE.stableMediaIdentity(candidate.parentManifestUrl)), candidate.frameId);
@@ -177,6 +222,8 @@
         if (parent) parent.segmentCount = Number(parent.segmentCount || 0) + 1;
         return false;
       }
+      const evidenceCandidate = Object.assign({}, candidate, { url });
+      this.rememberEvidence(numericTabId, evidenceCandidate);
 
       const requestFingerprint = String(candidate.requestFingerprint || CORE.requestFingerprint({
         url, requestId: candidate.requestId, tabId: numericTabId, frameId: candidate.frameId,
@@ -188,7 +235,7 @@
       const parentStable = scopedMediaId(candidate.parentStableMediaId || (candidate.parentManifestUrl ? CORE.stableMediaIdentity(candidate.parentManifestUrl) : ""), candidate.frameId);
       let stableMediaId = this.rootIdentity(numericTabId, parentStable || rawStable);
 
-      const manifestText = String(candidate.manifestText || "");
+      const manifestText = String(candidate.manifestText || "").slice(0, MAX_SAFE_MANIFEST_CHARS);
       const hls = manifestText && CORE.parseHlsRelationships ? CORE.parseHlsRelationships(manifestText, url) : null;
       const dash = manifestText && CORE.parseDashRelationships ? CORE.parseDashRelationships(manifestText, url) : null;
       const graph = hls && hls.isHls ? hls : dash && dash.isDash ? dash : null;
@@ -258,6 +305,8 @@
         manifest: Boolean(candidate.manifest || previous.manifest || graph && (graph.isHls || graph.isDash)),
         bodyDerived: Boolean(candidate.bodyDerived || previous.bodyDerived),
         playbackObserved: Boolean(candidate.playbackObserved || previous.playbackObserved),
+        playbackCorrelation: candidate.playbackCorrelation || previous.playbackCorrelation || "",
+        correlationEvidence: candidate.correlationEvidence || previous.correlationEvidence || "",
         autoOffer: Boolean(candidate.autoOffer || previous.autoOffer),
         at: Date.now()
       };
@@ -302,7 +351,14 @@
         bucket.clear();
         for (const item of sorted.slice(0, this.maxPerTab)) bucket.set(item.logicalMediaId || item.stableMediaId, item);
       }
-      if (!bucket.size) this.buckets.delete(numericTabId);
+      const aliases = this.aliases.get(numericTabId);
+      if (aliases) for (const [child, root] of aliases) {
+        if (!bucket.has(this.rootIdentity(numericTabId, root))) aliases.delete(child);
+      }
+      if (!bucket.size) {
+        this.buckets.delete(numericTabId);
+        this.aliases.delete(numericTabId);
+      }
     }
 
     best(tabId) { return this.snapshot(tabId, 1)[0] || null; }

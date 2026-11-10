@@ -59,7 +59,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          for suite in test_detector.js test_handoff.js test_secure_handoff.js test_fab.js test_phase43a_bridge.js test_background.js test_release_gate.js test_mp02_discovery.js test_mp02b_site_mode.js; do
+          for suite in test_detector.js test_handoff.js test_secure_handoff.js test_fab.js test_phase43a_bridge.js test_background.js test_release_gate.js test_mp02_discovery.js test_mp02b_site_mode.js test_mp02c_playback.js test_mp02c_observer.js; do
             node "browser-extension/tests/$suite"
           done
       - name: XP01 canonical XPI, encrypted transport, and historical provenance (no Gradle)
@@ -78,6 +78,8 @@ jobs:
           python3 -B scripts/test_xgo_mp01_hf07_emulator_contract.py
           python3 -B scripts/test_xgo_mp02a_source_contract.py
           python3 -B scripts/test_xgo_mp02b_source_contract.py
+          python3 -B scripts/test_xgo_mp02c_source_contract.py
+          python3 -B scripts/test_xgo_mp02c_staleness_audit.py
       - name: MP01 HF06 encrypted XPI pairing and Android JVM contract preflight (no Gradle)
         working-directory: .
         run: python3 -B scripts/test_xgo_mp01_hf06_capture_contract.py
