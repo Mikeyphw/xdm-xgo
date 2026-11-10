@@ -1,25 +1,6 @@
 name: XDM MP00 Media Parity Baseline
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'tests/media-parity/**'
-      - 'engine/media/**'
-      - 'engine/runtime/**'
-      - 'app/XDM.Android/browser-extension/**'
-      - 'app/XDM.Android/media/**'
-      - 'app/XDM.Android/transfer-native/**'
-      - '.github/workflows/media-parity.yml'
-  pull_request:
-    paths:
-      - 'tests/media-parity/**'
-      - 'engine/media/**'
-      - 'engine/runtime/**'
-      - 'app/XDM.Android/browser-extension/**'
-      - 'app/XDM.Android/media/**'
-      - 'app/XDM.Android/transfer-native/**'
-      - '.github/workflows/media-parity.yml'
   workflow_dispatch:
 
 permissions:
