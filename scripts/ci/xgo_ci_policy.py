@@ -79,6 +79,10 @@ MP03_PYTHON = [
     "scripts/test_xgo_mp03_android_e2e_contract.py",
     "scripts/test_xgo_mp03_android_staleness.py",
 ]
+MP05_PYTHON = [
+    "scripts/test_xgo_mp05_source_contract.py",
+    "scripts/test_xgo_mp05_staleness_audit.py",
+]
 MP04_PYTHON = [
     "scripts/test_xgo_mp04_source_contract.py",
     "scripts/test_xgo_mp04_staleness_audit.py",
@@ -160,6 +164,7 @@ def classify(paths: list[str]) -> dict:
     if groups & {"go", "android", "ci"}:
         tests.update(MP03_PYTHON)
         tests.update(MP04_PYTHON)
+        tests.update(MP05_PYTHON)
     if groups & {"android", "ci"}:
         tests.update(ANDROID_SOURCE_TESTS)
         tests.add("app/XDM.Android/tools/validate-xar10-browser-capture-evidence.py")

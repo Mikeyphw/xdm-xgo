@@ -1,0 +1,13 @@
+# MP05 — Durable fragment storage and Go/Android broker bridge
+
+Parent: PR #16 at `67fad5ed25341b93a24ebd2148d0593655b604b9`.
+
+The existing HLS and DASH Go executors previously fabricated `LocalArtifactRef` and `DurableBytesWritten` after in-memory byte hashing. In MP05, successful media and init-map commits require an explicit `DurableFragmentSink` round trip. `FileFragmentStore` writes a private file, syncs it, atomically renames it, syncs the containing directory, atomically updates a journal and verifies SHA-256 and 64-bit length by reading back the exact path. Commits with missing files, stale generations, wrong lengths, mismatched hashes, failed fsync, collision or exceeded quotas cannot be marked successful. Key bytes are never persisted. After a crash, reconciliation removes orphan files but does not promote them; journaled files are reverified and corruption removes them from the committed set.
+
+Android hosts `AndroidDurableFragmentStore` under the app's private `filesDir`, with typed `android_fragment_store` requests correlated to the single Go engine and handled outside its JNI frame pump. The Android broker is capture-session scoped through the existing encrypted `MediaRequestHandoffStore`. Replies contain only hashed IDs, generation, verified length, digest and private relative artifact reference; no URL, browser cookie, Authorization header or key. Go obtains proof through a second verify operation before accepting a committed receipt. This is the first hosted compare-mode bridge; the production Kotlin HLS executor remains the fallback and no Go-to-production execution cutover is enabled.
+
+**Safety and readiness:** single-process writer per storage root; process-level generation CAS; 2 MiB maximum one-shot JNI write and 512 MiB Android sandbox staging quota. Larger fragments, cross-process writes, encrypted CMAF initialization and real data migration require streaming/chunked transport and further qualification before MP06 cutover. Durable files alone do **not** imply MP08 mux/FFprobe/final output verification or `Completed` status.
+
+**Tests:** STORE01–STORE10 (durable readback/restart, simulated crash boundaries, stale and duplicate generations, digest corruption, quota/4GiB integer, wrong-range/init/key rejection and duplicate writers) plus strict source/CI classification tests. Hosted Go+Kotlin compilation, physical ARM64 storage/SAF, injected ENOSPC at kernel boundary and Room authoritative migration are pending acceptance, not silently reported as passed.
+
+The MP00–MP12 roadmap remains authoritative; next MP06 will bind this durable port to the actual authorized HLS network execution, then MP07 DASH multi-period and MP08 verified mux/publication.

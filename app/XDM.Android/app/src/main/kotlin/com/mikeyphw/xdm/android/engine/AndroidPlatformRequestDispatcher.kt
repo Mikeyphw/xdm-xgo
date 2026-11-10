@@ -16,6 +16,7 @@ class AndroidPlatformRequestDispatcher(
     private val downloadUiBroker: () -> AndroidDownloadExecutionBroker?,
     private val mediaBroker: () -> AndroidMediaPlatformBroker?,
     private val manifestFetcher: AndroidAuthorizedManifestFetcher,
+    private val fragmentStore: AndroidDurableFragmentStore,
 ) {
     private val mediaToolScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -27,6 +28,14 @@ class AndroidPlatformRequestDispatcher(
         val session = request.optLong("session", 0L)
         if (requestId <= 0L || session <= 0L) return false
         val payload = request.optJSONObject("payload") ?: JSONObject()
+        if (request.optString("kind") == "android_fragment_store") {
+            mediaToolScope.launch {
+                val reply = runCatching { fragmentStoreReply(requestId, session, payload) }
+                    .getOrElse { errorReply(requestId, session, "fragment_store_failed") }
+                runCatching { bridge.platformReply(reply.toString().toByteArray(Charsets.UTF_8)) }
+            }
+            return true
+        }
         if (request.optString("kind") == "manifest_fetch") {
             // The same non-blocking JNI pump serves each bounded manifest fetch.
             mediaToolScope.launch {
@@ -126,6 +135,12 @@ class AndroidPlatformRequestDispatcher(
         }
     }
 
+
+    private fun fragmentStoreReply(requestId: Long, session: Long, payload: JSONObject): JSONObject {
+        val result = fragmentStore.execute(payload)
+        return if (result.optBoolean("ok", false)) successReply(requestId, session, result)
+            else errorReply(requestId, session, result.optString("error_code", "fragment_store_refused"))
+    }
 
     private suspend fun manifestFetchReply(requestId: Long, session: Long, payload: JSONObject): JSONObject {
         val result = manifestFetcher.fetch(payload)

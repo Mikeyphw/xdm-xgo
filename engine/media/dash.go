@@ -2,8 +2,6 @@ package media
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/xml"
 	"errors"
 	"fmt"
@@ -532,8 +530,9 @@ type DASHExecutionResult struct {
 }
 
 type DASHExecutor struct {
-	fetcher DASHFetcher
-	ledger  *FragmentLedger
+    fetcher DASHFetcher
+    ledger *FragmentLedger
+    store DurableFragmentSink
 }
 
 func NewDASHExecutor(fetcher DASHFetcher, ledger *FragmentLedger) (*DASHExecutor, error) {
@@ -550,6 +549,17 @@ func NewDASHExecutor(fetcher DASHFetcher, ledger *FragmentLedger) (*DASHExecutor
 	return &DASHExecutor{fetcher: fetcher, ledger: ledger}, nil
 }
 func (e *DASHExecutor) Ledger() *FragmentLedger { return e.ledger }
+func (e *DASHExecutor) BindDurableStore(store DurableFragmentSink)error{
+    if e==nil||e.ledger==nil||store==nil{return ErrFragmentDurability}
+    for _,r:=range e.ledger.Snapshot(){if r.State==FragmentCommitted&&store.VerifyCommitted(r)!=nil{return ErrFragmentDurability}}
+    if snapshots,ok:=store.(interface{CommittedRecords()[]FragmentRecord});ok{
+        for _,r:=range snapshots.CommittedRecords(){
+            if r.Role=="init"{continue}
+            if _,err:=e.ledger.Commit(r);err!=nil{return err}
+        }
+    }
+    e.store=store;return nil
+}
 
 func (e *DASHExecutor) Execute(ctx context.Context, plan DASHExecutionPlan) (DASHExecutionResult, error) {
 	if e == nil || e.fetcher == nil || e.ledger == nil {
@@ -585,8 +595,13 @@ func (e *DASHExecutor) Execute(ctx context.Context, plan DASHExecutionPlan) (DAS
 			result.Status = "failed"
 			return result, err
 		}
-		result.Polls++
-		pending, skipped, err := ReconcileDASHTimeline(e.ledger.Snapshot(), m)
+        result.Polls++
+        for _,r:=range e.ledger.Snapshot(){
+            if r.State==FragmentCommitted&&(e.store==nil||e.store.VerifyCommitted(r)!=nil){
+                _,_=e.ledger.MarkCorrupt(r.Identity,gen,"missing_or_corrupt_stored_bytes")
+            }
+        }
+        pending, skipped, err := ReconcileDASHTimeline(e.ledger.Snapshot(), m)
 		if err != nil {
 			result.Status = "failed"
 			return result, err
@@ -623,8 +638,8 @@ func (e *DASHExecutor) Execute(ctx context.Context, plan DASHExecutionPlan) (DAS
 				return result, ErrDASHExecutionStopped
 			}
 		}
-		if m.Type == DASHStatic {
-			result.Status = "completed"
+        if m.Type == DASHStatic {
+            if result.FetchFailures>0||result.Unsupported>0 {result.Status="failed"} else {result.Status="completed"}
 		} else {
 			result.Status = "live_wait"
 		}
@@ -646,8 +661,18 @@ func (e *DASHExecutor) executeDASHFragment(ctx context.Context, f DASHFragment, 
 		_, _ = e.ledger.MarkCorrupt(f.Identity, gen, ErrDASHUnsupportedProtection.Error()+":"+string(f.Protection))
 		return out
 	}
-	if f.InitializationURL != "" {
-		if _, err := e.fetcher.FetchDASH(ctx, DASHFetchRequest{URI: f.InitializationURL, Kind: DASHFetchInit, CredentialRef: credential}); err != nil {
+    if f.InitializationURL != "" {
+        initBody,err:=e.fetcher.FetchDASH(ctx,DASHFetchRequest{URI:f.InitializationURL,Kind:DASHFetchInit,CredentialRef:credential})
+        if err==nil&&e.store==nil{err=ErrFragmentDurability}
+        if err==nil {
+            identity:=FragmentIdentity{Protocol:FragmentProtocolDASH,TimelineKey:"init:"+f.Identity.TimelineKey,
+                ResourceID:f.Identity.ResourceID+":init",Range:nil}
+            initRecord:=FragmentRecord{Identity:identity,Role:"init",AttemptGeneration:gen}
+            var receipt FragmentRecord
+            receipt,err=e.store.WriteAndCommitFragment(ctx,initRecord,initBody.Bytes)
+            if err==nil{err=e.store.VerifyCommitted(receipt)}
+        }
+        if err != nil {
 			out.Status = "fetch_failed"
 			out.Reason = "init"
 			_, _ = e.ledger.MarkCorrupt(f.Identity, gen, "dash_init_fetch_failed")
@@ -661,18 +686,15 @@ func (e *DASHExecutor) executeDASHFragment(ctx context.Context, f DASHFragment, 
 		_, _ = e.ledger.MarkCorrupt(f.Identity, gen, ErrDASHFetchFailed.Error())
 		return out
 	}
-	sum := sha256.Sum256(body.Bytes)
-	hash := "sha256:" + hex.EncodeToString(sum[:])
-	art := artifactRefForFragment(f.Identity)
-	rec := FragmentRecord{Identity: f.Identity, Role: f.Role, State: FragmentCommitted, ExpectedLength: int64(len(body.Bytes)), Hash: hash, AttemptGeneration: gen, LocalArtifactRef: art, DurableBytesWritten: true}
-	if _, err := e.ledger.Commit(rec); err != nil {
-		out.Status = "fetch_failed"
-		out.Reason = err.Error()
-		return out
-	}
-	out.Status = "committed"
-	out.ArtifactRef = art
-	out.Hash = hash
+    if e.store == nil {out.Status="fetch_failed";out.Reason="durable_store_required";return out}
+    rec:=FragmentRecord{Identity:f.Identity,Role:f.Role,AttemptGeneration:gen}
+    receipt,err:=e.store.WriteAndCommitFragment(ctx,rec,body.Bytes)
+    if err==nil{err=e.store.VerifyCommitted(receipt)}
+    if err==nil{_,err=e.ledger.Commit(receipt)}
+    if err!=nil{out.Status="fetch_failed";out.Reason="durable_store_refused";return out}
+    out.Status="committed"
+    out.ArtifactRef=receipt.LocalArtifactRef
+    out.Hash=receipt.Hash
 	out.Bytes = len(body.Bytes)
 	return out
 }

@@ -148,11 +148,12 @@ func TestDASHExecutionDynamicRestartAndMultiTrack(t *testing.T) {
 	}
 	fetcher := newMemoryDASHFetcher(objects)
 	ledger, _ := NewFragmentLedger()
-	exec, err := NewDASHExecutor(fetcher, ledger)
-	if err != nil {
-		t.Fatal(err)
-	}
-	res, err := exec.Execute(context.Background(), DASHExecutionPlan{BaseURL: "https://cdn.example/dash/manifest.mpd", Manifests: []string{p1, p2}, AttemptGeneration: 1})
+    exec, err := NewDASHExecutor(fetcher, ledger)
+    if err != nil {t.Fatal(err)}
+    store,err:=NewFileFragmentStore(t.TempDir(),64<<20)
+    if err!=nil{t.Fatal(err)}
+    if err=exec.BindDurableStore(store);err!=nil{t.Fatal(err)}
+    res, err := exec.Execute(context.Background(), DASHExecutionPlan{BaseURL: "https://cdn.example/dash/manifest.mpd", Manifests: []string{p1, p2}, AttemptGeneration: 1})
 	if err != nil {
 		t.Fatalf("execute: %v", err)
 	}
@@ -167,8 +168,11 @@ func TestDASHExecutionDynamicRestartAndMultiTrack(t *testing.T) {
 		t.Fatalf("restart did not suppress duplicates: %+v", second)
 	}
 	fetcher.fail["https://cdn.example/dash/v-3.m4s"] = fmt.Errorf("boom")
-	fresh, _ := NewDASHExecutor(fetcher, nil)
-	failed, err := fresh.Execute(context.Background(), DASHExecutionPlan{BaseURL: "https://cdn.example/dash/manifest.mpd", Manifests: []string{p2}, AttemptGeneration: 1, RepresentationIDs: []string{"v1"}})
+    fresh, _ := NewDASHExecutor(fetcher, nil)
+    freshStore,err:=NewFileFragmentStore(t.TempDir(),64<<20)
+    if err!=nil{t.Fatal(err)}
+    if err=fresh.BindDurableStore(freshStore);err!=nil{t.Fatal(err)}
+    failed, err := fresh.Execute(context.Background(), DASHExecutionPlan{BaseURL: "https://cdn.example/dash/manifest.mpd", Manifests: []string{p2}, AttemptGeneration: 1, RepresentationIDs: []string{"v1"}})
 	if err != nil {
 		t.Fatalf("typed fetch failure should not be fatal: %v", err)
 	}
