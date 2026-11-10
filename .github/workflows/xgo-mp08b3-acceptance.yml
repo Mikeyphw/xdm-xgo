@@ -49,6 +49,25 @@ jobs:
           python-version: '3.12'
       - name: Source/staleness negative checks
         run: python3 -B scripts/test_xgo_mp08b3_source_contract.py
+      - name: Install pinned Ubuntu 24.04 FFmpeg and FFprobe
+        shell: bash
+        run: |
+          set -euo pipefail
+          source /etc/os-release
+          test "$ID" = ubuntu
+          test "$VERSION_ID" = 24.04
+          sudo apt-get update -qq
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg
+          # Reuse MP00's 6.1.1 FFmpeg family, but do not hard-code an Ubuntu
+          # package patch revision. Both real executables are required.
+          python3 - <<'PY_FFMPEG_PIN'
+          import re, subprocess
+          for tool in ('ffmpeg', 'ffprobe'):
+              line = subprocess.check_output([tool, '-version'], text=True).splitlines()[0]
+              if not re.match(rf'^{tool} version 6\.1\.1(?:[-+.]|$)', line):
+                  raise SystemExit('MP08B3_FFMPEG_6_1_1_REQUIRED: ' + tool)
+          print('MP08B3_HOST_FFMPEG_6_1_1_READY')
+          PY_FFMPEG_PIN
       - name: Run real FFmpeg with local video and audio sources
         shell: bash
         env:

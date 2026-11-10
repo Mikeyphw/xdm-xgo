@@ -45,10 +45,20 @@ def workflow_contract(s):
      'android-emulator-runner@', 'api-level: 36', 'target: google_apis',
      'arch: x86_64', 'testInstrumentationRunnerArguments.class=com.mikeyphw.xdm.android.MP08B3MediaStoreAcceptanceInstrumentedTest',
      ':app:compileDebugAndroidTestKotlin', 'mp08b3_real_media.py',
+     'Install pinned Ubuntu 24.04 FFmpeg and FFprobe',
+     'sudo apt-get update -qq',
+     'apt-get install -y --no-install-recommends ffmpeg',
+     'MP08B3_HOST_FFMPEG_6_1_1_READY',
+     "for tool in ('ffmpeg', 'ffprobe'):",
+     "subprocess.check_output([tool, '-version'], text=True)",
+     "if not re.match(rf'^{tool} version 6\\.1\\.1(?:[-+.]|$)', line):",
+     "raise SystemExit('MP08B3_FFMPEG_6_1_1_REQUIRED: '",
      'scripts/test_xgo_mp08b3_source_contract.py',
      'test "$EMULATOR" = success',
      'test "$OPTED_IN" = true', 'test "$SOURCE" = success',
      'if: always() && github.event_name == \'workflow_dispatch\''))
+ if s.index('Install pinned Ubuntu 24.04 FFmpeg and FFprobe') > s.index('Run real FFmpeg with local video and audio sources'):
+  raise AssertionError('MP08B3_SOURCE_REFUSED: FFmpeg setup must precede playback')
  if re.search(r'(?m)^\s*x86_64_media_test:\s*true\s*$',s) or 'default: true' in s:
   raise AssertionError('MP08B3_SOURCE_REFUSED: test-only ABI must default disabled')
  if 'continue-on-error: true' in s or '|| true' in s or 'if-no-files-found: ignore' in s:
@@ -87,6 +97,11 @@ class MP08B3Contracts(unittest.TestCase):
    (workflow_contract,w.replace('default: false','default: true',1)),
    (workflow_contract,w.replace('test "$EMULATOR" = success','echo emulator-result',1)),
    (workflow_contract,w.replace(':app:compileDebugAndroidTestKotlin',':app:compileDebugKotlin',1)),
+   (workflow_contract,w.replace('sudo apt-get update -qq','echo unpinned-media',1)),
+   (workflow_contract,w.replace('apt-get install -y --no-install-recommends ffmpeg','echo missing-ffmpeg',1)),
+   (workflow_contract,w.replace('MP08B3_HOST_FFMPEG_6_1_1_READY','echo unqualified-version',1)),
+   (workflow_contract,w.replace("if not re.match(rf'^{tool} version 6\\.1\\.1(?:[-+.]|$)', line):",'if False:',1)),
+   (workflow_contract,w.replace('Install pinned Ubuntu 24.04 FFmpeg and FFprobe','Moved setup after media',1)),
    (host_contract,h.replace('verify(ffmpeg, ffprobe, corrupt, audio=True)','pass # removed decode negative',1)),
    (host_contract,h.replace("'publication_qualified': False", "'publication_qualified': True",1)),
   ]
