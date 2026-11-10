@@ -18,6 +18,7 @@ internal class AndroidPlatformRequestDispatcher(
     private val manifestFetcher: AndroidAuthorizedManifestFetcher,
     private val fragmentStore: AndroidDurableFragmentStore,
     private val mp08Broker: AndroidMP08VerifiedStageBroker,
+    private val mp08Publication: AndroidMP08PublicationBroker,
 ) {
     private val mediaToolScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
 
@@ -148,7 +149,13 @@ internal class AndroidPlatformRequestDispatcher(
 
 
     private suspend fun mp08FinalizationReply(requestId: Long, session: Long, payload: JSONObject): JSONObject {
-        val result = mp08Broker.execute(payload)
+        // assemble_verified is MP08B1's FFmpeg entry. Publication/readback
+        // are deliberately separate typed actions, never arbitrary filesystem IO.
+        val result = if (payload.optString("action") == "assemble_verified") {
+            mp08Broker.execute(payload)
+        } else {
+            mp08Publication.execute(payload)
+        }
         return if (result.optBoolean("ok", false) && !result.optBoolean("download_ready", true)) {
             successReply(requestId, session, result)
         } else {

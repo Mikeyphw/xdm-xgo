@@ -112,4 +112,61 @@ class MP08SourceContracts(unittest.TestCase):
   self.assertIn('"app/XDM.Android/app/src/"',policy)
   self.assertIn('test_mp08b1_private_android_broker_is_scoped_and_verified',load('scripts/test_xgo_mp08_source_contract.py'))
   self.assertIn('not DownloadReady',load('docs/xgo/MP08B1_ANDROID_VERIFIED_STAGE_ACCEPTANCE.md'))
+ def test_mp08b2_mp03_enum_contract_tracks_real_switch_membership(self):
+  legacy=load('scripts/test_xgo_mp03_android_e2e_contract.py')
+  platform=load('engine/runtime/platform/broker.go')
+  for a in ('assert_platform_kind_contract(broker)', 'def assert_platform_kind_contract(self, broker):',
+            'test_platform_kind_contract_rejects_missing_legacy_or_new_wiring',
+            '"ManifestFetch": "manifest_fetch"', '"ExternalMediaTool": "external_media_tool"',
+            '"MP08Finalization": "mp08_finalization"', 'allowed = {kind.strip() for kind in match.group(1).split(",")}'):
+   self.assertIn(a,legacy,a)
+  self.assertNotIn("'ExternalMediaTool, ManifestFetch,'",legacy)
+  self.assertIn('MP08Finalization',platform)
+ def test_mp08b2_mediastore_publication_failclosed_and_recoverable(self):
+  broker=load('app/XDM.Android/app/src/main/kotlin/com/mikeyphw/xdm/android/engine/AndroidMP08PublicationBroker.kt')
+  for a in ('MediaRequestHandoffStore.forCapture(capture)', 'handoff.expiresAtEpochMs',
+            'MediaStore.Downloads.EXTERNAL_CONTENT_URI', 'MediaStore.MediaColumns.IS_PENDING, 1',
+            'MediaStore.MediaColumns.IS_PENDING, 0', 'resolver.openFileDescriptor(uri, "w")',
+            'output.fd.sync()', 'verifyMediaStore(uriText, candidate.bytes, candidate.digest)',
+            'writeReceipt(txFile,', 'writeReceipt(receiptFile, receipt)',
+            'recoverPending()', 'resolver.delete(uri, null, null)',
+            'input.channel.position(start)',
+            'safeFile(file, verified)', 'hashFile(file) == digest',
+            'MediaRequestHandoffStore', 'download_ready", false'):
+   self.assertIn(a,broker,a)
+  for bad in ('ProcessBuilder(', 'Runtime.getRuntime()', 'optString("output_path")',
+              'optString("url")', 'optString("argv")','put("download_ready", true)'):
+   self.assertNotIn(bad,broker,bad)
+ def test_mp08b2_android_go_transport_uses_typed_correlated_requests_and_bounded_readback(self):
+  go=load('engine/runtime/android_mp08_host.go')
+  platform=load('engine/runtime/platform/broker.go')
+  for a in ('type androidMP08Host struct', 'media.MP08Host', 'platform.MP08Finalization',
+            'mp08WireChunk = 64 * 1024', 'base64.StdEncoding.Strict().DecodeString',
+            'func (h *androidMP08Host) ReadStaged(', 'func (h *androidMP08Host) ReadPublished(',
+            'func (h *androidMP08Host) PublishAtomic(', 'func (h *androidMP08Host) Probe(',
+            'func (h *androidMP08Host) Assemble(', 'mp08ProofWire(',
+            'got.Size != stage.Size', 'got.Hash != stage.SHA256'):
+   self.assertIn(a,go,a)
+  self.assertIn('MP08Finalization',platform)
+  self.assertIn('Kind = "mp08_finalization"',platform)
+  self.assertNotIn('net/http',go)
+  self.assertNotIn('os/exec',go)
+ def test_mp08b2_native_android_integration_is_opt_in(self):
+  dispatcher=load('app/XDM.Android/app/src/main/kotlin/com/mikeyphw/xdm/android/engine/AndroidPlatformRequestDispatcher.kt')
+  authority=load('app/XDM.Android/app/src/main/kotlin/com/mikeyphw/xdm/android/engine/AndroidEngineProcessAuthority.kt')
+  for a in ('mp08Publication.execute(payload)', 'if (payload.optString("action") == "assemble_verified")',
+            'mediaToolScope.launch', '!result.optBoolean("download_ready", true)'):
+   self.assertIn(a,dispatcher,a)
+  self.assertIn('AndroidMP08PublicationBroker(',authority)
+  self.assertIn('AndroidMP08VerifiedStageBroker(',authority)
+  self.assertNotIn('RunMP08VerifiedPublication(',authority)
+  self.assertIn('not production cutover',load('docs/xgo/MP08B2_MEDIASTORE_GO_HOST_ACCEPTANCE.md'))
+ def test_mp08b2_host_tests_are_real_not_synthetic_success(self):
+  tests=load('engine/runtime/android_mp08_host_test.go')
+  for i in range(1,15):
+   self.assertRegex(tests,rf'func TestMP08B2HOST{i:02d}[A-Za-z0-9_]*\(')
+  for a in ('JournalRejectsForgedReceipt','UnsupportedMultiPeriod','PartialAndSubtitle',
+            'StageTokenSwap','PublishedReceiptSwap','ChunkReaderFailClosed','ChunkedLargeOutput'):
+   self.assertIn(a,tests,a)
+  self.assertIn('test_mp08b2_host_tests_are_real_not_synthetic_success',load('scripts/test_xgo_mp08_source_contract.py'))
 if __name__=='__main__':unittest.main(verbosity=2)
