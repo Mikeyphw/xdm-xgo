@@ -83,6 +83,10 @@ MP05_PYTHON = [
     "scripts/test_xgo_mp05_source_contract.py",
     "scripts/test_xgo_mp05_staleness_audit.py",
 ]
+MP06_PYTHON = [
+    "scripts/test_xgo_mp06_source_contract.py",
+    "scripts/test_xgo_mp06_staleness_audit.py",
+]
 MP04_PYTHON = [
     "scripts/test_xgo_mp04_source_contract.py",
     "scripts/test_xgo_mp04_staleness_audit.py",
@@ -165,6 +169,7 @@ def classify(paths: list[str]) -> dict:
         tests.update(MP03_PYTHON)
         tests.update(MP04_PYTHON)
         tests.update(MP05_PYTHON)
+        tests.update(MP06_PYTHON)
     if groups & {"android", "ci"}:
         tests.update(ANDROID_SOURCE_TESTS)
         tests.add("app/XDM.Android/tools/validate-xar10-browser-capture-evidence.py")
@@ -173,7 +178,7 @@ def classify(paths: list[str]) -> dict:
     return {
         "groups": sorted(groups) if groups else ["docs"],
         "tests": sorted(tests),
-        "needs_android_compile": any(p.startswith(("app/XDM.Android/app/src/", "app/XDM.Android/browser-integration/src/",
+        "needs_android_compile": any(p.startswith(("app/XDM.Android/app/src/", "app/XDM.Android/media/src/", "app/XDM.Android/browser-integration/src/",
                                                       "app/XDM.Android/build.gradle", "app/XDM.Android/app/build.gradle", "app/XDM.Android/gradle/")) for p in paths),
         "needs_go": "go" in groups,
         "ci_sensitive": "ci" in groups,

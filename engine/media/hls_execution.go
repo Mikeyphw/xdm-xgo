@@ -50,6 +50,7 @@ const (
 	HLSExecutionLiveWait  HLSExecutionStatus = "live_wait"
 	HLSExecutionStopped   HLSExecutionStatus = "stopped"
 	HLSExecutionFailed    HLSExecutionStatus = "failed"
+	HLSExecutionPartial   HLSExecutionStatus = "partial"
 )
 
 type HLSFragmentStatus string
@@ -220,6 +221,12 @@ func (e *HLSExecutor) Execute(ctx context.Context, plan HLSExecutionPlan) (HLSEx
                 result.Status=HLSExecutionFailed
                 return result,nil
             }
+            if result.Gaps > 0 {
+                // EXT-X-GAP is an intentional missing media unit, never a
+                // complete playable output even if every other part is durable.
+                result.Status = HLSExecutionPartial
+                return result, nil
+            }
             result.Status = HLSExecutionCompleted
 			return result, nil
 		}
@@ -247,24 +254,57 @@ func (e *HLSExecutor) executeSegment(ctx context.Context, entry HLSTimelineEntry
 		return out
 	}
     if seg.Map != nil {
+        // RFC 8216: EXT-X-KEY binds to the initialization section at the
+        // EXT-X-MAP declaration, not to the later media segment's key.
+        // An AES-128-encrypted map requires its own explicit IV; never infer
+        // one from the media sequence number.
+        initKey := seg.Map.Key
+        if initKey != nil && initKey.Method != HLSProtectionNone {
+            if initKey.Method != HLSProtectionAES128 {
+                out.Status = HLSFragmentUnsupported
+                out.Reason = "unsupported_init_map_protection"
+                _, _ = e.ledger.MarkCorrupt(entry.Identity, generation, "unsupported_init_map_protection")
+                return out
+            }
+            if strings.TrimSpace(initKey.IV) == "" {
+                out.Status = HLSFragmentUnsupported
+                out.Reason = "encrypted_init_requires_explicit_iv"
+                _, _ = e.ledger.MarkCorrupt(entry.Identity, generation, "encrypted_init_iv_required")
+                return out
+            }
+        }
         initBody, err := e.fetcher.FetchHLS(ctx, HLSFetchRequest{URI: seg.Map.ResolvedURI, Kind: HLSFetchInitMap, Range: cloneByteRange(seg.Map.Range), CredentialRef: credentialRef})
-        if err == nil && e.store==nil {err=ErrFragmentDurability}
+        if err == nil && e.store == nil { err = ErrFragmentDurability }
         if err == nil {
-            identity:=FragmentIdentity{Protocol:FragmentProtocolHLS,TimelineKey:"init:"+entry.Identity.TimelineKey,
-                ResourceID:entry.Identity.ResourceID+":init-map",Range:cloneByteRange(seg.Map.Range)}
-            initRecord:=FragmentRecord{Identity:identity,Role:"init",AttemptGeneration:generation}
-            var receipt FragmentRecord
-            receipt,err=e.store.WriteAndCommitFragment(ctx,initRecord,initBody.Bytes)
-            if err==nil{err=e.store.VerifyCommitted(receipt)}
+            initBytes := initBody.Bytes
+            identity := FragmentIdentity{Protocol: FragmentProtocolHLS, TimelineKey: "init:" + entry.Identity.TimelineKey,
+                ResourceID: entry.Identity.ResourceID + ":init-map", Range: cloneByteRange(seg.Map.Range)}
+            if initKey != nil && initKey.Method == HLSProtectionAES128 {
+                key, keyErr := e.fetcher.FetchHLS(ctx, HLSFetchRequest{URI: initKey.ResolvedURI, Kind: HLSFetchKey, CredentialRef: credentialRef})
+                if keyErr != nil { err = ErrHLSKeyFetchFailed } else {
+                    initBytes, err = DecryptHLSAES128(initBytes, key.Bytes, initKey.IV, seg.MediaSequence)
+                }
+                // Ciphertext BYTERANGE does not equal PKCS#7-unpadded bytes.
+                // Persist only the opaque key fingerprint, never its signed URL.
+                identity.Range = nil
+                identity.EncryptionID = string(initKey.Method) + ":" + digestID("hls-init-key", strings.Join([]string{initKey.ResolvedURI, initKey.IV}, "\x00"))
+            }
+            if err == nil {
+                initRecord := FragmentRecord{Identity: identity, Role: "init", AttemptGeneration: generation}
+                var receipt FragmentRecord
+                receipt, err = e.store.WriteAndCommitFragment(ctx, initRecord, initBytes)
+                if err == nil { err = e.store.VerifyCommitted(receipt) }
+            }
         }
         if err != nil {
-			out.Status = HLSFragmentFetchFailed
-			out.Reason = "init_map"
-			_, _ = e.ledger.MarkCorrupt(entry.Identity, generation, "init_map_fetch_failed")
-			return out
-		}
-		out.InitMapURI = seg.Map.ResolvedURI
-	}
+            out.Status = HLSFragmentFetchFailed
+            out.Reason = "init_map"
+            _, _ = e.ledger.MarkCorrupt(entry.Identity, generation, "init_map_fetch_or_decrypt_failed")
+            return out
+        }
+        out.InitMapURI = seg.Map.ResolvedURI
+    }
+
 	body, err := e.fetcher.FetchHLS(ctx, HLSFetchRequest{URI: seg.ResolvedURI, Kind: HLSFetchSegment, Range: cloneByteRange(seg.Range), CredentialRef: credentialRef})
 	if err != nil {
 		out.Status = HLSFragmentFetchFailed

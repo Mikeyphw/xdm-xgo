@@ -470,9 +470,13 @@ class NativeHlsExecutionEngine {
         }
         val sha = sha256Bytes(artifactBytes)
         val hashMatches = expectedSha256Hex?.equals(sha, ignoreCase = true) ?: true
-        val valid = artifactBytes.size >= expectedMin && !containsManifest && !html && plan.nativeExecutable && hashMatches
+        // An explicit EXT-X-GAP is an intentional hole, not a downloaded part.
+        // MP08 owns the separate, explicitly partial salvage operation.
+        val hasExplicitGaps = plan.parts.any { it.gap }
+        val valid = artifactBytes.size >= expectedMin && !containsManifest && !html && plan.nativeExecutable && hashMatches && !hasExplicitGaps
         val message = when {
             !plan.nativeExecutable -> "Native HLS plan was not executable; completion rejected."
+            hasExplicitGaps -> "Explicit HLS gaps require partial recovery, not Completed."
             containsManifest -> "Artifact is playlist text, not finalized media."
             html -> "Artifact looks like an HTML/error response, not media."
             artifactBytes.size < expectedMin -> "Artifact is too small for the planned part count."
