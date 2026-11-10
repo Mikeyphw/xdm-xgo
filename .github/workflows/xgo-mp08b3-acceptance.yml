@@ -193,6 +193,8 @@ jobs:
           force-avd-creation: true
           disable-animations: true
           emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          # HF06: on instrumentation failure the Python driver prints only bounded,
+          # redacted process-local crash diagnostics and still fails closed.
           # emulator-runner executes each script line via /usr/bin/sh -c,
           # not one shared script. Exactly one POSIX-safe command is mandatory.
           script: python3 -B scripts/test_xgo_mp08b3_source_contract.py --api36-execute

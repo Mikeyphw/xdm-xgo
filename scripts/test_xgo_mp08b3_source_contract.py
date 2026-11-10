@@ -182,6 +182,56 @@ def api36_receipt_contract(directory):
  return True
 
 
+def api36_sanitize_crash_line(raw):
+ """Minimize exposed diagnostics: never include bearer data, URL signatures or cookies."""
+ text = str(raw).replace('\x00', '')[:450]
+ text = re.sub(r'(?i)\b(?:https?|ftp)://[^\s\]\[()<>]+', '[REDACTED_URL]', text)
+ text = re.sub(r'(?i)\bbearer\s+[^\s,;]+', 'Bearer [REDACTED]', text)
+ text = re.sub(r'(?i)\b(authorization|proxy-authorization|cookie|set-cookie|x-api-key|api[_-]?key|access[_-]?token|refresh[_-]?token|password|secret|signature|sig)\s*[:=]\s*[^\s,;]+', r'\1=[REDACTED]', text)
+ text = re.sub(r'\b(?:[0-9a-f]{40,}|[A-Za-z0-9_\-]{120,})\b', '[REDACTED_ID]', text)
+ return text
+
+
+def api36_crash_excerpt(raw, max_lines=52):
+ """Extract process-local failure signals; never upload an unfiltered logcat."""
+ lines=str(raw).splitlines()
+ anchors=re.compile(r'FATAL EXCEPTION|Fatal signal|java\.lang\.(?:UnsatisfiedLinkError|NoClassDefFoundError|ExceptionInInitializerError)|Process:\s*com\.mikeyphw\.xdm\.android|Instrumentation run failed|INSTRUMENTATION_FAILED|Abort message|AndroidJUnitRunner',re.I)
+ windows=[]
+ for idx,line in enumerate(lines):
+  if anchors.search(line):
+   start=max(0,idx-2)
+   stop=min(len(lines),idx+19)
+   chunk=lines[start:stop]
+   # A foreign app cannot turn its own logcat into a project diagnostic.
+   if not any(('com.mikeyphw.xdm.android' in x or 'AndroidJUnitRunner' in x or 'INSTRUMENTATION_FAILED' in x) for x in chunk):
+    continue
+   windows.extend(range(start,stop))
+ picked=sorted(set(windows))[:max_lines]
+ return [api36_sanitize_crash_line(lines[i]) for i in picked]
+
+
+def api36_collect_crash_diagnostics():
+ """Best-effort diagnostics only; this function NEVER turns a failed test green."""
+ import subprocess
+ print('MP08B3_API36_CRASH_DIAGNOSTIC_BEGIN',flush=True)
+ total=0
+ for buffer in ('crash','main','events'):
+  try:
+   p=subprocess.run(['adb','-s',API36_SERIAL,'logcat','-d','-b',buffer,'-v','brief','-t','1500'],
+                    text=True,capture_output=True,timeout=22,check=False)
+   if p.returncode:
+    print('MP08B3_API36_LOGCAT_'+buffer.upper()+'_UNAVAILABLE',flush=True)
+    continue
+   for line in api36_crash_excerpt(p.stdout,max_lines=52 if buffer=='crash' else 36):
+    print('MP08B3_API36_DIAG_'+buffer.upper()+': '+line,flush=True)
+    total+=1
+  except (OSError,subprocess.TimeoutExpired):
+   print('MP08B3_API36_LOGCAT_'+buffer.upper()+'_UNAVAILABLE',flush=True)
+ if not total:print('MP08B3_API36_NO_REDACTED_CRASH_TRACE_AVAILABLE',flush=True)
+ print('MP08B3_API36_CRASH_DIAGNOSTIC_END',flush=True)
+ return total
+
+
 def run_api36_acceptance():
  """Executed only in an opt-in GitHub Actions API36 emulator job."""
  import os, shutil, subprocess
@@ -219,6 +269,7 @@ def run_api36_acceptance():
  result=subprocess.run(['./gradlew','--no-daemon','--max-workers=2',':app:connectedDebugAndroidTest',
   '-Pandroid.testInstrumentationRunnerArguments.class='+API36_CLASS],cwd=android,check=False,timeout=3600)
  if result.returncode!=0:
+  api36_collect_crash_diagnostics()
   raise AssertionError('MP08B3_API36_REFUSED: real instrumentation Gradle failure rc='+str(result.returncode))
  api36_receipt_contract(output)
  print('MP08B3_API36_FOUR_REAL_INSTRUMENTATION_TESTS_PASS',flush=True)
@@ -226,7 +277,7 @@ def run_api36_acceptance():
 
 
 def execute_api36_mock(command, *, sdk='36', qemu='1', abi='x86_64', boot='1', suite='pass', gradle_rc=0,
-                      head=True, opted=True, offline=False, extra_device=False):
+                      head=True, opted=True, offline=False, extra_device=False, crash_log=None):
  """Model the REAL action by invoking ONE command via /bin/sh -c."""
  import tempfile, subprocess, os, html
  from pathlib import Path
@@ -235,7 +286,12 @@ def execute_api36_mock(command, *, sdk='36', qemu='1', abi='x86_64', boot='1', s
   (scripts/'test_xgo_mp08b3_source_contract.py').write_text(Path(__file__).read_text(),encoding='utf-8')
   mockhead='a'*40
   (bin/'git').write_text('#!/bin/sh\n[ "$*" = "rev-parse HEAD" ] || exit 5\necho '+(mockhead if head else 'b'*40)+'\n')
+  import shlex
+  diagnostic=crash_log if crash_log is not None else 'E AndroidRuntime: FATAL EXCEPTION: Instrumentation\nE AndroidRuntime: Process: com.mikeyphw.xdm.android.debug, PID: 4321\nE AndroidRuntime: java.lang.UnsatisfiedLinkError: dlopen failed: libexample.so not found'
+  (root/'mock-crash.txt').write_text(diagnostic,encoding='utf-8')
   (bin/'adb').write_text('#!/bin/sh\n'
+   'case "$*" in *" logcat -d -b crash "*) cat '+shlex.quote(str(root/'mock-crash.txt'))+'; exit 0 ;; esac\n'
+   'case "$*" in *" logcat -d -b main "*) cat '+shlex.quote(str(root/'mock-crash.txt'))+'; exit 0 ;; esac\n'
    'if [ "$*" = "devices -l" ]; then\n'
    'printf "List of devices attached\\n'+API36_SERIAL+'\\t'+('offline' if offline else 'device')+' product:sdk\\n"\n'
    +('printf "other-1234\\tdevice\\n"\n' if extra_device else '')+
@@ -286,6 +342,9 @@ class MP08B3Contracts(unittest.TestCase):
  def test_android_real_mediastore_instrumentation(self):android_test_contract(read(ANDROID))
  def test_manual_emulator_gated_and_fail_closed(self):workflow_contract(read(WORKFLOW))
  def test_kvm_bootstrap_fails_closed(self):kvm_bootstrap_contract(read(WORKFLOW))
+ def test_api36_crash_capture_source_contract(self):
+  src=read('scripts/test_xgo_mp08b3_source_contract.py')
+  require(src, ('api36_collect_crash_diagnostics()', 'MP08B3_API36_CRASH_DIAGNOSTIC_BEGIN', 'MP08B3_API36_DIAG_', 'api36_sanitize_crash_line', 'api36_crash_excerpt', 'if result.returncode!=0:', 'raise AssertionError(\'MP08B3_API36_REFUSED: real instrumentation Gradle failure rc=\''))
  def test_api36_action_one_command_and_realistic_mock(self):
   command=api36_execution_contract(read(WORKFLOW))
   p=execute_api36_mock(command)
@@ -303,6 +362,18 @@ class MP08B3Contracts(unittest.TestCase):
     bad=execute_api36_mock(command,**kwargs)
     self.assertNotEqual(bad.returncode,0,(bad.stdout,bad.stderr))
     self.assertNotIn('MP08B3_API36_FOUR_REAL_INSTRUMENTATION_TESTS_PASS',bad.stdout)
+ def test_api36_crash_diagnostics_fail_closed(self):
+  command=api36_execution_contract(read(WORKFLOW))
+  crash='E AndroidRuntime: FATAL EXCEPTION: Instrumentation\nE AndroidRuntime: Process: com.mikeyphw.xdm.android.debug, PID: 99\nE AndroidRuntime: java.lang.UnsatisfiedLinkError: libxdmcore.so https://test.invalid/media?token=SECRET_VALUE Authorization: Bearer PASSWORD_VALUE'
+  bad=execute_api36_mock(command,gradle_rc=1,crash_log=crash)
+  self.assertNotEqual(bad.returncode,0)
+  self.assertIn('MP08B3_API36_CRASH_DIAGNOSTIC_BEGIN',bad.stdout)
+  self.assertIn('UnsatisfiedLinkError',bad.stdout)
+  self.assertIn('REDACTED_URL',bad.stdout)
+  self.assertNotIn('SECRET_VALUE',bad.stdout+bad.stderr)
+  self.assertNotIn('PASSWORD_VALUE',bad.stdout+bad.stderr)
+  self.assertNotIn('MP08B3_API36_FOUR_REAL_INSTRUMENTATION_TESTS_PASS',bad.stdout)
+  self.assertEqual(api36_crash_excerpt('E AndroidRuntime: FATAL EXCEPTION\nE AndroidRuntime: Process: com.other.app, PID: 99\nE AndroidRuntime: java.lang.IllegalStateException'),[])
  def test_host_real_media_and_negative_cases(self):host_contract(read(HOST))
  def test_prior_production_guards_not_replaced(self):
   for p in ('engine/media/verified_publication.go','engine/runtime/android_mp08_host.go',
