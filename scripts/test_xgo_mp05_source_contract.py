@@ -33,6 +33,23 @@ class MP05Contracts(unittest.TestCase):
    self.assertNotIn('LocalArtifactRef: art, DurableBytesWritten: true',s)
    self.assertIn('"init"',s)
    self.assertIn('durable_store_required',s)
+ def test_mp05_ci_hf03_real_go_kotlin_compiler_boundaries(self):
+  hls=source('engine/media/hls_execution.go')
+  imports=hls.split('import (',1)[1].split('\n)',1)[0]
+  self.assertIn('"encoding/hex"',imports)
+  self.assertIn('hex.DecodeString(raw)',hls)
+  self.assertEqual(imports.count('"encoding/hex"'),1)
+  kotlin=source(APP+'AndroidDurableFragmentStore.kt')
+  self.assertNotIn('OsConstants.O_DIRECTORY',kotlin)
+  self.assertIn('require(dir.isDirectory && canonicalChild(dir))',kotlin)
+  self.assertIn('Os.open(dir.absolutePath, OsConstants.O_RDONLY, 0)',kotlin)
+  self.assertIn('try { Os.fsync(fd) } finally { Os.close(fd) }',kotlin)
+  self.assertIn('FileOutputStream(temp)',kotlin)
+  self.assertIn('output.fd.sync()',kotlin)
+  dispatcher=source(APP+'AndroidPlatformRequestDispatcher.kt')
+  self.assertRegex(dispatcher,r'(?m)^internal class AndroidPlatformRequestDispatcher\(')
+  self.assertIn('private val fragmentStore: AndroidDurableFragmentStore,',dispatcher)
+  self.assertIn('fragmentStore.execute(payload)',dispatcher)
  def test_android_bridge_is_typed_bounded_and_non_blocking(self):
   go=source('engine/runtime/android_fragment_store.go')
   broker=source('engine/runtime/platform/broker.go')

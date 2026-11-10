@@ -10,7 +10,7 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
 /** Handles the XGO-70 platform requests that require Android OS facts or secure storage. */
-class AndroidPlatformRequestDispatcher(
+internal class AndroidPlatformRequestDispatcher(
     private val bridge: AndroidGoEngineBridge,
     private val network: AndroidNetworkPolicyBroker,
     private val downloadUiBroker: () -> AndroidDownloadExecutionBroker?,

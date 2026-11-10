@@ -158,7 +158,10 @@ internal class AndroidDurableFragmentStore(context: Context) {
         dir.canonicalFile.path.startsWith(root.parentFile!!.canonicalPath + File.separator) &&
             !java.nio.file.Files.isSymbolicLink(dir.toPath())
     private fun syncDirectory(dir: File) {
-        val fd = Os.open(dir.absolutePath, OsConstants.O_RDONLY or OsConstants.O_DIRECTORY, 0)
+        // Only app-private, existing, non-symlink directories are eligible.
+        require(dir.isDirectory && canonicalChild(dir)) { "unsafe_fragment_directory" }
+        // Android SDK exposes O_RDONLY for directory handles; keep the directory fsync.
+        val fd = Os.open(dir.absolutePath, OsConstants.O_RDONLY, 0)
         try { Os.fsync(fd) } finally { Os.close(fd) }
     }
     private fun hash(bytes: ByteArray): String = "sha256:" + MessageDigest.getInstance("SHA-256")
