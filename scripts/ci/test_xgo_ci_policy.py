@@ -51,6 +51,17 @@ class TargetTests(unittest.TestCase):
         self.assertTrue(mixed["needs_android_compile"])
         self.assertIn("scripts/test_xgo_mp07_source_contract.py",mixed["tests"])
 
+    def test_mp08_verified_publication_go_stage_always_routes_source_and_negative_tests(self):
+        go=policy.classify(["engine/media/verified_publication.go"])
+        self.assertTrue(go["needs_go"])
+        self.assertFalse(go["needs_android_compile"])
+        self.assertIn("scripts/test_xgo_mp08_source_contract.py",go["tests"])
+        self.assertIn("scripts/test_xgo_mp08_staleness_audit.py",go["tests"])
+        changed=policy.classify(["engine/media/verified_publication_test.go", "app/XDM.Android/app/src/main/kotlin/Media.kt"])
+        self.assertTrue(changed["needs_android_compile"])
+        self.assertTrue(changed["needs_go"])
+        self.assertIn("scripts/test_xgo_mp08_staleness_audit.py",changed["tests"])
+
     def test_go_not_desktop_or_android(self):
         plan = policy.classify(["engine/media/graph.go"])
         self.assertTrue(plan["needs_go"])
