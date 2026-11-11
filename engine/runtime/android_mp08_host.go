@@ -96,7 +96,7 @@ func (h *androidMP08Host) Assemble(ctx context.Context, p media.MP08Finalization
 	empty := media.MP08StagedOutput{}
 	if p.SchemaVersion != 1 || p.Partial || p.Container != "mp4" || p.ExpectedDurationMS < 1000 ||
 		p.ExpectedDurationMS > 24*60*60*1000 || !mp08WireName.MatchString(p.DestinationKey) ||
-		(p.Source != "hls_vod" && p.Source != "dash_static") || p.RequireSubtitle ||
+		(p.Source != "hls_vod" && p.Source != "dash_static" && p.Source != "hls_live" && p.Source != "dash_live") || p.RequireSubtitle ||
 		len(p.Tracks) < 1 || len(p.Tracks) > 2 {
 		return empty, errAndroidMP08Host
 	}

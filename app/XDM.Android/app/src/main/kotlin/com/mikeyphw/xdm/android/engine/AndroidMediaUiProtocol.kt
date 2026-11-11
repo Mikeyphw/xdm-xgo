@@ -35,6 +35,8 @@ data class AndroidMediaUiCommandResult(
     val manifestGraph: ManifestGraphV1Contract.Graph? = null,
     val manifestRevision: String? = null,
     val manifestSelectionPlan: ManifestSelectionV1Contract.Plan? = null,
+    val nextPollAfterMs: Long = 3_000L,
+    val allTracksEnded: Boolean = false,
 )
 
 internal object AndroidMediaUiWire {
@@ -135,6 +137,8 @@ internal object AndroidMediaUiWire {
         requestId = payload.optString("client_request_id"),
         action = payload.optString("action"),
         ok = payload.optBoolean("ok", false),
+        nextPollAfterMs = payload.optLong("next_poll_after_ms", 3_000L),
+        allTracksEnded = payload.optBoolean("all_tracks_ended", false),
         status = payload.nullableString("status"),
         captureId = payload.nullableString("capture_id"),
         outputPath = payload.nullableString("output_path"),

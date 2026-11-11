@@ -41,14 +41,17 @@ internal class AndroidMP08VerifiedStageBroker(
         val destination = request.optString("destination_key")
         val source = request.optString("source")
         if (request.optInt("schema_version", -1) != 1 || request.optString("action") != "assemble_verified" ||
-            source !in setOf("hls_vod", "dash_static") || request.optInt("period_count", -1) != 1 ||
+            source !in setOf("hls_vod", "dash_static", "hls_live", "dash_live") || request.optInt("period_count", -1) != 1 ||
             !safeName.matches(destination) || capture.isBlank() || capture.length > 256 ||
             request.optBoolean("partial") || request.optBoolean("has_gaps") || request.optBoolean("is_dynamic") ||
             request.optBoolean("require_subtitle") || request.optString("container") != "mp4") {
             return@withLock refused("mp08_plan_not_admitted")
         }
         val handoff = MediaRequestHandoffStore.forCapture(capture)
-        if (handoff == null || handoff.expiresAtEpochMs <= System.currentTimeMillis()) {
+        val browserAuthorized = handoff != null && handoff.expiresAtEpochMs > System.currentTimeMillis()
+        // Go's sealed MP09 plan may stage verified LOCAL fragments after the
+        // browser's network authorization expires. It cannot fetch new media.
+        if (!browserAuthorized && source !in setOf("hls_live", "dash_live")) {
             return@withLock refused("mp08_capture_authorization_missing")
         }
         val duration = request.optLong("expected_duration_ms", -1L)
@@ -153,7 +156,7 @@ internal class AndroidMP08VerifiedStageBroker(
             val receipt = JSONObject()
                 .put("schema_version", 1).put("capture_hash", captureHash)
                 .put("destination_key", destination).put("hash", hashBefore)
-                .put("bytes", sizeBefore).put("status", "verified_app_private")
+                .put("bytes", sizeBefore).put("source", source).put("status", "verified_app_private")
                 .put("download_ready", false).put("media_store_published", false)
             val pendingReceipt = File(verified, ".${UUID.randomUUID()}.receipt")
             try {
