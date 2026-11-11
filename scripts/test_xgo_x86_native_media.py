@@ -92,7 +92,7 @@ class X86MediaSourceContracts(unittest.TestCase):
         needed=("types: [labeled]", "github.event.label.name == 'xgo-x86-native-media'",
                 'github.event.pull_request.head.repo.full_name == github.repository',
                 'fetch-depth: 0','persist-credentials: false',
-                'fbda3835e5a252df577d1ce8676a39768cf8de22',
+                '36e8e318305023a8edbc5cff836bfeea2f5c56d6',
                 'go-version-file: engine/go.mod','ndk;29.0.14206865',
                 'tools/install-ffmpeg-runtime.py --build-pinned',
                 'tools/build-aria2-runtime.py --build-pinned',
@@ -106,6 +106,11 @@ class X86MediaSourceContracts(unittest.TestCase):
         self.assertEqual(len(re.findall(r'(?m)^jobs:\s*$',w)),1)
         self.assertEqual(len(re.findall(r'(?m)^  x86-native-media:\s*$',w)),1)
         self.assertIn('GITHUB_EVENT_ACTION: ${{ github.event.action }}',w)
+        # P01 is stacked on qualified PR #24. Preserve exact base and original
+        # independent MP08B3 ancestry in m.PARENT, never a comment-only marker.
+        self.assertIn('test "$BASE_SHA" = 36e8e318305023a8edbc5cff836bfeea2f5c56d6',w)
+        self.assertIn('test "$BASE_BRANCH" = feature/xgo-x86-media-runtimes-20261110',w)
+        self.assertIn('git merge-base --is-ancestor "$BASE_SHA" "$HEAD_SHA"',w)
         self.assertIn('xgo-x86-native-media',w)
 
     def test_x86_native_build_caching_is_abi_separated_and_verified(self):

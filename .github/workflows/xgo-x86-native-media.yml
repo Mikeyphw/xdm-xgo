@@ -1,4 +1,4 @@
-# Opt-in media native test lane only. This workflow is NEVER a release gate.
+# Opt-in x86 native media + MP08B3 API36 acceptance; NEVER a release gate.
 name: XGO x86_64 Native Media Runtime (opt-in only)
 on:
   pull_request:
@@ -41,8 +41,8 @@ jobs:
           set -euo pipefail
           [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
-          test "$BASE_SHA" = fbda3835e5a252df577d1ce8676a39768cf8de22
-          test "$BASE_BRANCH" = feature/xgo-mp08b3-real-media-acceptance-20261110
+          test "$BASE_SHA" = 36e8e318305023a8edbc5cff836bfeea2f5c56d6
+          test "$BASE_BRANCH" = feature/xgo-x86-media-runtimes-20261110
           test "$OWNER" = "$GITHUB_REPOSITORY"
           test "$LABEL_NAME" = xgo-x86-native-media
           git merge-base --is-ancestor "$BASE_SHA" "$HEAD_SHA"
@@ -67,6 +67,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -B scripts/test_xgo_x86_native_media.py
+          python3 -B scripts/test_xgo_mp08b3_x86_integration.py
           python3 -B scripts/test_xgo_native_cache_contract.py
           python3 -B scripts/xgo_x86_native_media.py check
       - uses: actions/setup-java@v6
@@ -156,7 +157,9 @@ jobs:
           disable-animations: true
           emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           # A single POSIX command: the action invokes sh -c separately per line.
-          script: python3 -B scripts/xgo_x86_native_media.py emulator --head "$XGO_X86_MEDIA_EXPECTED_HEAD" --evidence "$RUNNER_TEMP/xgo-x86-media"
+          # P01: one POSIX-safe line; three native tests, then four real MP08B3 cases, same API36 emulator.
+          # The second command cannot run when the first fails. Neither may be skipped.
+          script: python3 -B scripts/xgo_x86_native_media.py emulator --head "$XGO_X86_MEDIA_EXPECTED_HEAD" --evidence "$RUNNER_TEMP/xgo-x86-media" && python3 -B scripts/xgo_mp08b3_x86_integration.py run --head "$XGO_X86_MEDIA_EXPECTED_HEAD" --evidence "$RUNNER_TEMP/xgo-x86-media"
       - uses: actions/upload-artifact@v6
         if: always()
         with:
