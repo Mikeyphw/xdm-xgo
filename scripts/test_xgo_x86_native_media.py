@@ -112,8 +112,8 @@ class X86MediaSourceContracts(unittest.TestCase):
         src=WORKFLOW.read_text()
         job_env=src.split('    env:\n',1)[1].split('    steps:\n',1)[0]
         self.assertNotIn('runner.temp',job_env)
-        self.assertIn('actions/cache/restore@v4',src)
-        self.assertIn('actions/cache/save@v4',src)
+        self.assertIn('actions/cache/restore@v5',src)
+        self.assertIn('actions/cache/save@v5',src)
         self.assertNotIn('restore-keys:',src)
         self.assertIn('scripts/xgo_x86_native_media.py',src)
         self.assertIn('tool',src.lower())
@@ -133,5 +133,39 @@ class X86MediaSourceContracts(unittest.TestCase):
         self.assertIn('False',TARGET.read_text())
         self.assertIn("'release_eligible':False",TARGET.read_text())
         self.assertIn('len(names)!=3',TARGET.read_text())
+
+class EmulatorInventoryHF03(unittest.TestCase):
+    def test_adb_tabs_and_spaces_both_pass_exact_single_device(self):
+        m=mod()
+        valid={'ro.build.version.sdk':'36','ro.kernel.qemu':'1',
+               'ro.boot.qemu':'','ro.product.cpu.abi':'x86_64',
+               'sys.boot_completed':'1'}
+        for separator in ('\t','    '):
+            m.validate_emulator_identity('List of devices attached\n\nemulator-5554'+separator+
+                'device product:sdk_gphone64_x86_64 model:test(AVD)\n',valid)
+        alt=dict(valid,**{'ro.kernel.qemu':'','ro.boot.qemu':'1'})
+        m.validate_emulator_identity('List of devices attached\nemulator-5554 device\n',alt)
+    def test_offline_extra_device_or_wrong_abi_never_passes(self):
+        m=mod()
+        base='List of devices attached\nemulator-5554    device\n'
+        props={'ro.build.version.sdk':'36','ro.kernel.qemu':'1',
+               'ro.boot.qemu':'','ro.product.cpu.abi':'x86_64','sys.boot_completed':'1'}
+        for inventory in (base+'emulator-5556 device\n',
+                          base.replace('device','offline'),
+                          base.replace('emulator-5554','localhost:5555'),
+                          'List of devices attached\n\n'):
+            with self.assertRaisesRegex(RuntimeError,'REFUSED'):
+                m.validate_emulator_identity(inventory,props)
+        for key,value in (('ro.build.version.sdk','35'),('ro.product.cpu.abi','arm64-v8a'),
+                          ('sys.boot_completed','0'),('ro.kernel.qemu','0')):
+            bad=dict(props,**{key:value})
+            with self.assertRaisesRegex(RuntimeError,'property mismatch'):
+                m.validate_emulator_identity(base,bad)
+    def test_native_emulator_execution_still_requires_real_junit(self):
+        src=(ROOT/'scripts/xgo_x86_native_media.py').read_text()
+        self.assertIn(':app:connectedDebugAndroidTest',src)
+        self.assertIn("len(names)!=3",src)
+        self.assertIn('verify_native(',src)
+        self.assertIn('validate_emulator_identity(devices,props)',src)
 
 if __name__=='__main__':unittest.main(verbosity=2)

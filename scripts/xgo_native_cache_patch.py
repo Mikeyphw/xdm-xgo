@@ -55,7 +55,7 @@ def cache_steps(abi: str) -> tuple[str, str, str]:
           echo 'XGO_{abi_upper}_NATIVE_BUILD_CACHE_PATHS_READY'
 '''.format(abi=abi,abi_upper=abi.upper().replace('-','_'),parent=parent)
     restore = '''      - name: Restore {abi} verified native source and object cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         id: xgo-native-cache
         with:
           path: |
@@ -64,7 +64,7 @@ def cache_steps(abi: str) -> tuple[str, str, str]:
 '''.format(abi=abi, paths=paths, key=key)
     save = '''      - name: Save {abi} verified native source and object cache
         if: steps.xgo-native-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: |
 {paths}
@@ -79,7 +79,7 @@ def patch_arm64_workflow(src: str) -> str:
         src.count(ARM64_ANCHOR) != 1 or src.count(ARM64_AFTER) != 1 or
         src.count(ARM64_VALIDATE_ANCHOR) != 1 or src.count(ARM64_VALIDATE_AFTER) != 1):
         raise ValueError('XGO_ARM64_CACHE_SOURCE_WORKFLOW_ANCHOR_DRIFT')
-    if 'Restore arm64 verified native source and object cache' in src or 'actions/cache/save@v4' in src:
+    if 'Restore arm64 verified native source and object cache' in src or 'actions/cache/save@v5' in src:
         raise ValueError('XGO_ARM64_CACHE_ALREADY_APPLIED_OR_UNREVIEWED')
     setup,restore,save = cache_steps('arm64')
     # The heavyweight validate lane warms the same ABI-pinned cache on main;
@@ -106,6 +106,6 @@ def patch_arm64_workflow(src: str) -> str:
           python3 tools/verify-ffmpeg-runtime.py --require-payload --require-16kb-alignment
 '''
     src = src.replace(ARM64_AFTER, verified + save + ARM64_AFTER, 1)
-    if src.count('actions/cache/restore@v4') != 2 or src.count('actions/cache/save@v4') != 2:
+    if src.count('actions/cache/restore@v5') != 2 or src.count('actions/cache/save@v5') != 2:
         raise ValueError('XGO_ARM64_CACHE_INCOMPLETE')
     return src

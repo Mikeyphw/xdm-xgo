@@ -40,10 +40,10 @@ class NativeCachingTests(unittest.TestCase):
         self.assertNotIn('XDM_ANDROID_NATIVE_DEPS_CACHE:',job_env)
         self.assertIn('xgo-x86-native-media',src)
         self.assertNotIn('continue-on-error: true',src)
-        self.assertIn('actions/cache/restore@v4',src)
-        self.assertIn('actions/cache/save@v4',src)
-        self.assertEqual(src.count('actions/cache/restore@v4'),1)
-        self.assertEqual(src.count('actions/cache/save@v4'),1)
+        self.assertIn('actions/cache/restore@v5',src)
+        self.assertIn('actions/cache/save@v5',src)
+        self.assertEqual(src.count('actions/cache/restore@v5'),1)
+        self.assertEqual(src.count('actions/cache/save@v5'),1)
 
     def test_exact_abi_and_source_locked_keys(self):
         m=load()
@@ -119,8 +119,8 @@ jobs:
         self.assertLess(release.index('Build pinned FFmpeg runtime'),release.index('Verify both ARM64'))
         self.assertLess(release.index('Verify both ARM64'),release.index('Save arm64 verified'))
         self.assertLess(release.index('Save arm64 verified'),release.index('Fetch provenance-pinned'))
-        self.assertEqual(output.count('actions/cache/restore@v4'),2)
-        self.assertEqual(output.count('actions/cache/save@v4'),2)
+        self.assertEqual(output.count('actions/cache/restore@v5'),2)
+        self.assertEqual(output.count('actions/cache/save@v5'),2)
         for bad in (fixture.replace('signed-release:','release:'),fixture.replace('Build pinned ARM64','Build random ARM64'),fixture.replace('Post-DL03 final common validation','Altered validation'),fixture+fixture,output):
             with self.assertRaisesRegex(ValueError,'DRIFT|ALREADY_APPLIED'):m.patch_arm64_workflow(bad)
 
@@ -135,6 +135,27 @@ jobs:
         self.assertNotIn('XDM_RELEASE_STORE_FILE',src)
         self.assertIn('python3 -B tools/verify-ffmpeg-runtime.py --require-payload --require-16kb-alignment',src)
         self.assertIn('python3 -B tools/verify-aria2-runtime.py --require-payload --require-16kb-alignment --require-source-build',src)
+
+    def test_node24_actions_and_go_cache_path(self):
+        src=WORKFLOW.read_text()
+        for action in ('actions/cache/restore@v5','actions/cache/save@v5',
+                       'actions/setup-python@v7','actions/setup-java@v6',
+                       'actions/upload-artifact@v6','gradle/actions/setup-gradle@v6'):
+            self.assertIn(action,src)
+        self.assertIn('cache-dependency-path: engine/go.sum',src)
+        self.assertIn('cache-provider: basic',src)
+        for stale in ('actions/cache/restore@v4','actions/cache/save@v4',
+                      'actions/setup-python@v5','actions/setup-java@v4',
+                      'actions/upload-artifact@v4','gradle/actions/setup-gradle@v4'):
+            self.assertNotIn(stale,src)
+        if ANDROID_WORKFLOW.is_file():
+            arm=ANDROID_WORKFLOW.read_text()
+            for stale in ('actions/cache/restore@v4','actions/cache/save@v4',
+                          'actions/setup-java@v4','actions/upload-artifact@v4',
+                          'gradle/actions/setup-gradle@v4'):
+                self.assertNotIn(stale,arm)
+            self.assertIn('actions/cache/restore@v5',arm)
+            self.assertIn('cache-provider: basic',arm)
 
     def test_actual_arm64_workflow_when_present(self):
         if not ANDROID_WORKFLOW.is_file():return

@@ -235,6 +235,39 @@ def main() -> None:
 
 # The single-line emulator action invokes this entry point, rather than passing
 # a multi-line heredoc through ReactiveCircus' per-line /usr/bin/sh -c behavior.
+def parse_adb_inventory(output: str) -> list[tuple[str,str]]:
+    """Parse adb devices -l with tabs OR spaces, rejecting non-device rows."""
+    rows=[]
+    for raw in output.splitlines():
+        value=raw.strip()
+        if not value or value == 'List of devices attached':
+            continue
+        tokens=value.split()
+        if len(tokens) < 2 or not re.fullmatch(r'[A-Za-z0-9:._-]+',tokens[0]):
+            refuse('malformed ADB device inventory')
+        rows.append((tokens[0],tokens[1]))
+    return rows
+
+
+def validate_emulator_identity(devices: str, props: dict[str,str]) -> None:
+    rows=parse_adb_inventory(devices)
+    expected=[('emulator-5554','device')]
+    relevant={key:props.get(key,'') for key in (
+        'ro.build.version.sdk','ro.kernel.qemu','ro.boot.qemu',
+        'ro.product.cpu.abi','sys.boot_completed')}
+    # Small, bounded identity evidence. No raw logcat, shell output, credentials or URLs.
+    print('XGO_X86_MEDIA_EMULATOR_IDENTITY='+json.dumps(
+        {'device_rows':rows[:8],'device_count':len(rows),'properties':relevant},
+        sort_keys=True),flush=True)
+    if rows != expected:
+        refuse('exact single emulator-5554 device inventory required')
+    if (relevant['ro.build.version.sdk'] != '36' or
+        relevant['ro.product.cpu.abi'] != 'x86_64' or
+        relevant['sys.boot_completed'] != '1' or
+        (relevant['ro.kernel.qemu'] != '1' and relevant['ro.boot.qemu'] != '1')):
+        refuse('API36 x86_64 native emulator property mismatch')
+    print('XGO_X86_MEDIA_API36_X86_NATIVE_IDENTITY_PASS',flush=True)
+
 def emulator_accept(expected: str, evidence_dir: Path) -> None:
     import xml.etree.ElementTree as ET
     if not re.fullmatch(r'[0-9a-f]{40}',expected) or git('rev-parse','HEAD')!=expected:
@@ -245,12 +278,10 @@ def emulator_accept(expected: str, evidence_dir: Path) -> None:
     def adb(*a: str) -> str:
         return subprocess.check_output(['adb','-s','emulator-5554',*a],text=True,timeout=30).strip().replace('\r','')
     devices=subprocess.check_output(['adb','devices','-l'],text=True,timeout=30)
-    listed=[line.split()[0] for line in devices.splitlines() if '\tdevice' in line]
-    if listed != ['emulator-5554'] or adb('shell','getprop','ro.build.version.sdk') != '36' or \
-       adb('shell','getprop','ro.kernel.qemu') != '1' or \
-       adb('shell','getprop','ro.product.cpu.abi') != 'x86_64' or \
-       adb('shell','getprop','sys.boot_completed') != '1':
-        refuse('API36 primary x86_64 emulator and single-device check failed')
+    keys=('ro.build.version.sdk','ro.kernel.qemu','ro.boot.qemu',
+          'ro.product.cpu.abi','sys.boot_completed')
+    props={key:adb('shell','getprop',key) for key in keys}
+    validate_emulator_identity(devices,props)
     klass='com.mikeyphw.xdm.android.XgoX86NativeMediaInstrumentedTest'
     android=ROOT/'app/XDM.Android'
     output=android/'app/build/outputs/androidTest-results/connected'

@@ -59,7 +59,7 @@ jobs:
           printf 'XDM_ARIA2_SOURCE_CACHE_DIR=%s\n' "$RUNNER_TEMP/x86-aria2" >> "$GITHUB_ENV"
           printf 'XDM_ANDROID_NATIVE_DEPS_CACHE=%s\n' "$RUNNER_TEMP/x86-openssl" >> "$GITHUB_ENV"
           echo 'XGO_X86_64_NATIVE_BUILD_CACHE_PATHS_READY'
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: Static source, security and negative-mutation contracts
@@ -69,15 +69,18 @@ jobs:
           python3 -B scripts/test_xgo_x86_native_media.py
           python3 -B scripts/test_xgo_native_cache_contract.py
           python3 -B scripts/xgo_x86_native_media.py check
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
       - uses: actions/setup-go@v6
         with:
           go-version-file: engine/go.mod
+          cache-dependency-path: engine/go.sum
       - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
       - name: Install pinned toolchain and real source-build dependencies
         shell: bash
         run: |
@@ -89,7 +92,7 @@ jobs:
         shell: bash
         run: python3 -B scripts/xgo_x86_native_media.py prepare --head "$XGO_X86_MEDIA_EXPECTED_HEAD"
       - name: Restore x86_64 verified native source and object cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v5
         id: xgo-native-cache
         with:
           path: |
@@ -108,7 +111,7 @@ jobs:
           python3 -B tools/verify-aria2-runtime.py --require-payload --require-16kb-alignment --require-source-build
       - name: Save x86_64 verified native source and object cache
         if: steps.xgo-native-cache.outputs.cache-hit != 'true'
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v5
         with:
           path: |
             ${{ runner.temp }}/x86-ffmpeg
@@ -154,7 +157,7 @@ jobs:
           emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           # A single POSIX command: the action invokes sh -c separately per line.
           script: python3 -B scripts/xgo_x86_native_media.py emulator --head "$XGO_X86_MEDIA_EXPECTED_HEAD" --evidence "$RUNNER_TEMP/xgo-x86-media"
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         if: always()
         with:
           name: xgo-x86-native-media-evidence-not-arm64
