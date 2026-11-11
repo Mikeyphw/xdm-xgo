@@ -38,20 +38,23 @@ val xgoNativePreverified = providers.gradleProperty("xdm.preverifiedNativeRuntim
 '''
     anchor='val '+task+' = tasks.register<Exec>("'+task+'") {'
     src=checked_replace(src,anchor,pre+anchor,'REGISTER_'+which)
-    opening=anchor+'\n'
-    guarded='''    // A source-built, separately verified payload must already be installed.
-    onlyIf {
-        if (xgoNativePreverified.get()) {
-            check(System.getenv("GITHUB_ACTIONS") == "true" &&
-                System.getenv("XGO_X86_MEDIA_OPT_IN") == "yes" &&
-                System.getenv("XGO_X86_NATIVE_ATTESTED") == "yes") {
-                "Refusing unverifiable prebuilt native reuse outside opt-in hosted x86 CI"
-            }
-        }
-        !xgoNativePreverified.get()
+    # No execution-time onlyIf closure may capture the Gradle script object.
+    # A task's enabled flag is resolved at configuration time and serialized as
+    # task state. This preserves strict Gradle configuration-cache validation.
+    disable='''// CI-only; source builds and independent verification already completed.
+if (xgoNativePreverified.get()) {
+    check(System.getenv("GITHUB_ACTIONS") == "true" &&
+          System.getenv("RUNNER_OS") == "Linux" &&
+          System.getenv("GITHUB_REPOSITORY") == "Mikeyphw/xdm-xgo" &&
+          System.getenv("XGO_X86_MEDIA_OPT_IN") == "yes" &&
+          System.getenv("XGO_X86_NATIVE_ATTESTED") == "yes") {
+        "Refusing unverifiable native reuse outside pinned hosted opt-in CI"
     }
+    __NATIVE_TASK__.configure { enabled = false }
+}
 '''
-    src=checked_replace(src,opening,opening+guarded,'GUARD_'+which)
+    src=checked_replace(src,'\nandroid {\n',
+        '\n'+disable.replace('__NATIVE_TASK__',task)+'\nandroid {\n','CONFIG_DISABLE_'+which)
     marker='src/main/jniLibs/arm64-v8a/'
     count=src.count(marker)
     # FF module declares binary outputs and multiple independent verifier inputs.
@@ -62,8 +65,8 @@ val xgoNativePreverified = providers.gradleProperty("xdm.preverifiedNativeRuntim
     for expected in (FLAG,'XGO_X86_NATIVE_ATTESTED','xgoNativePreverified',
                      'src/main/jniLibs/x86_64/',task):
         if expected not in src:refuse('MISSING_EXPECTED_'+expected)
-    # No changes to selected build task's compiler/source recipe except the
-    # additional conditional onlyIf: FALSE during preverified opt-in CI.
+    # Source-build task and independent Gradle verify tasks remain registered.
+    # Only the CI-only already-attested native compiler task is disabled.
     return src
 
 def check_source(root=ROOT):
@@ -97,8 +100,8 @@ def main():
         if not a.head:refuse('HEAD_REQUIRED')
         prepare(a.head)
     else:
-        for which,s in [('ffmpeg','val installPinnedFfmpegRuntime = tasks.register<Exec>("installPinnedFfmpegRuntime") {\n'+ '    outputs.files("src/main/jniLibs/arm64-v8a/test.so")\n'),
-                        ('aria2','val buildPinnedAria2Runtime = tasks.register<Exec>("buildPinnedAria2Runtime") {\n'+'    outputs.files("src/main/jniLibs/arm64-v8a/test.so")\n')]:
+        for which,s in [('ffmpeg','val installPinnedFfmpegRuntime = tasks.register<Exec>("installPinnedFfmpegRuntime") {\n'+ '    outputs.files("src/main/jniLibs/arm64-v8a/test.so")\n}\n\nandroid {\n}\n'),
+                        ('aria2','val buildPinnedAria2Runtime = tasks.register<Exec>("buildPinnedAria2Runtime") {\n'+'    outputs.files("src/main/jniLibs/arm64-v8a/test.so")\n}\n\nandroid {\n}\n')]:
             # Synthetic source deliberately fails the minimum-output-path check.
             try:gradle_transform(s,which)
             except ValueError as ex:

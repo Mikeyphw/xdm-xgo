@@ -70,6 +70,7 @@ jobs:
           python3 -B scripts/test_xgo_x86_native_media.py
           python3 -B scripts/test_xgo_mp08b3_x86_integration.py
           python3 -B scripts/test_xgo_mp08b3_x86_optimizations.py
+          python3 -B scripts/test_xgo_mp08b3_x86_hf05_ci.py
           python3 -B scripts/xgo_mp08b3_x86_optimize.py check
           python3 -B scripts/test_xgo_native_cache_contract.py
           python3 -B scripts/xgo_x86_native_media.py check
@@ -80,7 +81,21 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: engine/go.mod
-          cache-dependency-path: engine/go.sum
+          cache: false  # setup-go's shared ~/go tar restore races with existing module files
+      - name: Initialize isolated x86_64 Go module and build caches
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 0700 "$RUNNER_TEMP/xgo-x86-go-mod" "$RUNNER_TEMP/xgo-x86-go-build"
+          printf 'GOMODCACHE=%s\n' "$RUNNER_TEMP/xgo-x86-go-mod" >> "$GITHUB_ENV"
+          printf 'GOCACHE=%s\n' "$RUNNER_TEMP/xgo-x86-go-build" >> "$GITHUB_ENV"
+      - name: Restore and save isolated x86_64 Go cache (Node24)
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ runner.temp }}/xgo-x86-go-mod
+            ${{ runner.temp }}/xgo-x86-go-build
+          key: ${{ runner.os }}-xgo-x86-go123-v1-${{ hashFiles('engine/go.mod', 'engine/go.sum') }}
       - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
       - uses: gradle/actions/setup-gradle@v6
         with:

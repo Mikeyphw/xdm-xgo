@@ -36,10 +36,13 @@ class OptTests(unittest.TestCase):
         for role,task,count in [('ffmpeg','installPinnedFfmpegRuntime',8),('aria2','buildPinnedAria2Runtime',5)]:
             text='val '+task+' = tasks.register<Exec>("'+task+'") {\n'
             text+=''.join('    outputs.file("src/main/jniLibs/arm64-v8a/lib'+str(i)+'.so")\n' for i in range(count))
-            text+='    commandLine("python3", "tools/build-aria2-runtime.py", "--build-pinned")\n}\n'
+            text+='    commandLine("python3", "tools/build-aria2-runtime.py", "--build-pinned")\n}\n\nandroid {\n}\n'
             out=m.gradle_transform(text,role)
             self.assertIn('XGO_X86_NATIVE_ATTESTED',out)
-            self.assertIn('!xgoNativePreverified.get()',out)
+            self.assertIn(task+'.configure { enabled = false }',out)
+            self.assertNotIn('onlyIf {',out)
+            self.assertIn('if (xgoNativePreverified.get())',out)
+            self.assertIn('System.getenv("XGO_X86_NATIVE_ATTESTED")',out)
             self.assertNotIn('src/main/jniLibs/arm64-v8a/',out)
             self.assertEqual(out.count('src/main/jniLibs/x86_64/'),count)
             self.assertIn('"--build-pinned"',out)  # source-build path remains available outside CI skip
@@ -69,6 +72,13 @@ class OptTests(unittest.TestCase):
 
         self.assertEqual(workflow.count('uses: ReactiveCircus/android-emulator-runner@'),1)
         self.assertIn('xgo_mp08b3_x86_integration.py run',workflow)
+
+    def test_ci_only_optimize_command_line_check(self):
+        import subprocess, sys
+        result=subprocess.run([sys.executable,'-B',str(ROOT/'scripts/xgo_mp08b3_x86_optimize.py'),'check'],
+                              capture_output=True,text=True,timeout=30)
+        self.assertEqual(result.returncode,0,result.stderr)
+        self.assertIn('XGO_X86_OPT_GRADLE_NEGATIVE_CONTRACTS_PASS',result.stdout)
 
     def test_gradle_basic_writable_only_after_explicit_same_repo_pr_guard(self):
         s=(ROOT/'.github/workflows/xgo-x86-native-media.yml').read_text()

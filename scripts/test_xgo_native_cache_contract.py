@@ -142,7 +142,19 @@ jobs:
                        'actions/setup-python@v7','actions/setup-java@v6',
                        'actions/upload-artifact@v6','gradle/actions/setup-gradle@v6'):
             self.assertIn(action,src)
-        self.assertIn('cache-dependency-path: engine/go.sum',src)
+        # setup-go does not restore its shared ~/go tar cache; a separate
+        # Node24 action owns isolated directories and an exact go.mod/go.sum key.
+        self.assertIn('actions/setup-go@v6',src)
+        self.assertIn('go-version-file: engine/go.mod',src)
+        self.assertIn('cache: false',src)
+        self.assertIn('Initialize isolated x86_64 Go module and build caches',src)
+        self.assertIn('GOMODCACHE=',src)
+        self.assertIn('GOCACHE=',src)
+        self.assertIn('actions/cache@v5',src)
+        self.assertIn('xgo-x86-go-mod',src)
+        self.assertIn('xgo-x86-go-build',src)
+        self.assertIn("hashFiles('engine/go.mod', 'engine/go.sum')",src)
+        self.assertNotIn('cache-dependency-path: engine/go.sum',src)
         self.assertIn('cache-provider: basic',src)
         for stale in ('actions/cache/restore@v4','actions/cache/save@v4',
                       'actions/setup-python@v5','actions/setup-java@v4',
