@@ -1,10 +1,11 @@
-# Opt-in media native test lane only. This workflow is NEVER a release gate.
+# Opt-in x86 native media + MP08B3 API36 acceptance; NEVER a release gate.
 name: XGO x86_64 Native Media Runtime (opt-in only)
 on:
   pull_request:
     types: [labeled]
 permissions:
   contents: read
+  actions: read  # only for same-repo, SHA/ABI/source-verified artifact reuse
 concurrency:
   group: xgo-x86-native-media-${{ github.event.pull_request.number }}
   cancel-in-progress: true
@@ -41,8 +42,8 @@ jobs:
           set -euo pipefail
           [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
-          test "$BASE_SHA" = fbda3835e5a252df577d1ce8676a39768cf8de22
-          test "$BASE_BRANCH" = feature/xgo-mp08b3-real-media-acceptance-20261110
+          test "$BASE_SHA" = 36e8e318305023a8edbc5cff836bfeea2f5c56d6
+          test "$BASE_BRANCH" = feature/xgo-x86-media-runtimes-20261110
           test "$OWNER" = "$GITHUB_REPOSITORY"
           test "$LABEL_NAME" = xgo-x86-native-media
           git merge-base --is-ancestor "$BASE_SHA" "$HEAD_SHA"
@@ -67,6 +68,10 @@ jobs:
         run: |
           set -euo pipefail
           python3 -B scripts/test_xgo_x86_native_media.py
+          python3 -B scripts/test_xgo_mp08b3_x86_integration.py
+          python3 -B scripts/test_xgo_mp08b3_x86_optimizations.py
+          python3 -B scripts/test_xgo_mp08b3_x86_hf05_ci.py
+          python3 -B scripts/xgo_mp08b3_x86_optimize.py check
           python3 -B scripts/test_xgo_native_cache_contract.py
           python3 -B scripts/xgo_x86_native_media.py check
       - uses: actions/setup-java@v6
@@ -76,21 +81,54 @@ jobs:
       - uses: actions/setup-go@v6
         with:
           go-version-file: engine/go.mod
-          cache-dependency-path: engine/go.sum
+          cache: false  # setup-go's shared ~/go tar restore races with existing module files
+      - name: Initialize isolated x86_64 Go module and build caches
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 0700 "$RUNNER_TEMP/xgo-x86-go-mod" "$RUNNER_TEMP/xgo-x86-go-build"
+          printf 'GOMODCACHE=%s\n' "$RUNNER_TEMP/xgo-x86-go-mod" >> "$GITHUB_ENV"
+          printf 'GOCACHE=%s\n' "$RUNNER_TEMP/xgo-x86-go-build" >> "$GITHUB_ENV"
+      - name: Restore and save isolated x86_64 Go cache (Node24)
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ runner.temp }}/xgo-x86-go-mod
+            ${{ runner.temp }}/xgo-x86-go-build
+          key: ${{ runner.os }}-xgo-x86-go123-v1-${{ hashFiles('engine/go.mod', 'engine/go.sum') }}
       - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
       - uses: gradle/actions/setup-gradle@v6
         with:
           cache-provider: basic
+          # Trusted, explicitly labeled same-repo PR only. Never use this for forks.
+          cache-read-only: false
       - name: Install pinned toolchain and real source-build dependencies
         shell: bash
         run: |
           set -euo pipefail
+          python3 -B scripts/xgo_ci_perf_receipt.py mark toolchain start
+          trap 'python3 -B scripts/xgo_ci_perf_receipt.py mark toolchain end' EXIT
           sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'platform-tools' 'emulator' 'system-images;android-36;google_apis;x86_64' 'ndk;29.0.14206865'
-          sudo apt-get update -qq
-          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential pkg-config perl nasm yasm autoconf automake libtool cmake make
+          required=(gcc g++ pkg-config perl nasm yasm autoconf automake libtoolize cmake make)
+          missing=()
+          for executable in "${required[@]}"; do
+            if ! command -v "$executable" >/dev/null 2>&1; then missing+=("$executable"); fi
+          done
+          if (( ${#missing[@]} )); then
+            echo "XGO_X86_OPT_MISSING_HOST_TOOLS=${missing[*]}"
+            sudo apt-get update -qq
+            sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential pkg-config perl nasm yasm autoconf automake libtool cmake make
+          else
+            echo 'XGO_X86_OPT_PINNED_HOST_TOOLS_ALREADY_PRESENT'
+          fi
       - name: Test-only pinned x86_64 source profile (NEVER committed)
+        id: native-profile
         shell: bash
-        run: python3 -B scripts/xgo_x86_native_media.py prepare --head "$XGO_X86_MEDIA_EXPECTED_HEAD"
+        run: |
+          set -euo pipefail
+          python3 -B scripts/xgo_x86_native_media.py prepare --head "$XGO_X86_MEDIA_EXPECTED_HEAD"
+          python3 -B scripts/xgo_mp08b3_x86_optimize.py prepare --head "$XGO_X86_MEDIA_EXPECTED_HEAD"
+          python3 -B scripts/xgo_verified_native_artifact.py fingerprint --github-output "$GITHUB_OUTPUT"
       - name: Restore x86_64 verified native source and object cache
         uses: actions/cache/restore@v5
         id: xgo-native-cache
@@ -99,31 +137,91 @@ jobs:
             ${{ runner.temp }}/x86-ffmpeg
             ${{ runner.temp }}/x86-aria2
             ${{ runner.temp }}/x86-openssl
-          key: ${{ runner.os }}-ndk29.0.14206865-x86_64-native-v2-${{ hashFiles('app/XDM.Android/media-ffmpeg/runtime/ffmpeg-runtime.json', 'app/XDM.Android/transfer-aria2/runtime/aria2-runtime.json', 'app/XDM.Android/tools/install-ffmpeg-runtime.py', 'app/XDM.Android/tools/build-aria2-runtime.py', 'app/XDM.Android/tools/android_native_openssl.py', 'app/XDM.Android/tools/android_elf_runtime.py', 'scripts/xgo_x86_native_media.py', 'scripts/xgo_x86_64_profile.py', 'tools/xgo/build_android_xdmcore_x86_64.py') }}
+            app/XDM.Android/media-ffmpeg/src/main/jniLibs/x86_64/libxdm_ffmpeg.so
+            app/XDM.Android/media-ffmpeg/src/main/jniLibs/x86_64/libxdm_ffprobe.so
+            app/XDM.Android/media-ffmpeg/runtime/ffmpeg-runtime.lock.json
+            app/XDM.Android/transfer-aria2/src/main/jniLibs/x86_64/libaria2c.so
+            app/XDM.Android/transfer-aria2/runtime/aria2-runtime.lock.json
+            app/XDM.Android/media-ffmpeg/runtime/licenses/FFmpeg-LGPL-2.1.txt
+            app/XDM.Android/media-ffmpeg/runtime/licenses/OpenSSL-Apache-2.0.txt
+            app/XDM.Android/transfer-aria2/runtime/licenses/GPL-2.0.txt
+            app/XDM.Android/transfer-aria2/runtime/licenses/SOURCE-NOTICE.txt
+          key: ${{ runner.os }}-ndk29.0.14206865-x86_64-native-v2-licenses-v1-${{ hashFiles('app/XDM.Android/media-ffmpeg/runtime/ffmpeg-runtime.json', 'app/XDM.Android/transfer-aria2/runtime/aria2-runtime.json', 'app/XDM.Android/tools/install-ffmpeg-runtime.py', 'app/XDM.Android/tools/build-aria2-runtime.py', 'app/XDM.Android/tools/android_native_openssl.py', 'app/XDM.Android/tools/android_elf_runtime.py', 'scripts/xgo_x86_native_media.py', 'scripts/xgo_x86_64_profile.py', 'tools/xgo/build_android_xdmcore_x86_64.py') }}
       - name: Build and independently verify native FFmpeg FFprobe and aria2
+        id: native-source
         shell: bash
         working-directory: app/XDM.Android
+        env:
+          GH_TOKEN: ${{ github.token }}
+          XGO_NATIVE_OBJECT_CACHE_HIT: ${{ steps.xgo-native-cache.outputs.cache-hit }}
         run: |
           set -euo pipefail
-          python3 -B tools/install-ffmpeg-runtime.py --build-pinned --jobs 2
-          python3 -B tools/build-aria2-runtime.py --build-pinned --jobs 2
+          python3 -B ../../scripts/xgo_ci_perf_receipt.py mark native start
+          trap 'python3 -B ../../scripts/xgo_ci_perf_receipt.py mark native end' EXIT
+          if [[ "$XGO_NATIVE_OBJECT_CACHE_HIT" == 'true' ]]; then
+            # Cache entry includes ELF bytes AND source locks. A corrupt hit refuses.
+            python3 -B tools/verify-ffmpeg-runtime.py --require-payload --require-16kb-alignment
+            python3 -B tools/verify-aria2-runtime.py --require-payload --require-16kb-alignment --require-source-build
+            python3 -B ../../scripts/xgo_ci_perf_receipt.py mode same-pr-native-cache
+            echo 'mode=same-pr-native-cache' >> "$GITHUB_OUTPUT"
+          elif python3 -B ../../scripts/xgo_verified_native_artifact.py restore; then
+            python3 -B ../../scripts/xgo_ci_perf_receipt.py mode cross-pr-artifact
+            echo 'mode=cross-pr-artifact' >> "$GITHUB_OUTPUT"
+          else
+            rc=$?
+            if [[ "$rc" -ne 10 ]]; then
+              echo 'XGO_X86_OPT_REFUSED: corrupt or unauthorized artifact' >&2
+              exit "$rc"
+            fi
+            # Only pinned source and identical ABI/NDK/recipe inputs may be reused.
+            python3 -B ../../scripts/xgo_ci_perf_receipt.py mode pinned-source-build
+            echo 'mode=pinned-source-build' >> "$GITHUB_OUTPUT"
+            python3 -B tools/install-ffmpeg-runtime.py --build-pinned --jobs 2
+            python3 -B tools/build-aria2-runtime.py --build-pinned --jobs 2
+          fi
+          # Both paths require the exact same independent source/ELF/lock check.
           python3 -B tools/verify-ffmpeg-runtime.py --require-payload --require-16kb-alignment
           python3 -B tools/verify-aria2-runtime.py --require-payload --require-16kb-alignment --require-source-build
+          python3 -B ../../scripts/xgo_verified_native_artifact.py pack --out "$RUNNER_TEMP/xgo-x86-native-artifact/native-output.zip"
+          printf 'XGO_X86_NATIVE_ATTESTED=yes\n' >> "$GITHUB_ENV"
+          echo 'XGO_X86_OPT_VERIFIED_NATIVE_OUTPUTS_READY' 
       - name: Save x86_64 verified native source and object cache
-        if: steps.xgo-native-cache.outputs.cache-hit != 'true'
+        if: steps.xgo-native-cache.outputs.cache-hit != 'true' && steps.native-source.outputs.mode == 'pinned-source-build'
         uses: actions/cache/save@v5
         with:
           path: |
             ${{ runner.temp }}/x86-ffmpeg
             ${{ runner.temp }}/x86-aria2
             ${{ runner.temp }}/x86-openssl
+            app/XDM.Android/media-ffmpeg/src/main/jniLibs/x86_64/libxdm_ffmpeg.so
+            app/XDM.Android/media-ffmpeg/src/main/jniLibs/x86_64/libxdm_ffprobe.so
+            app/XDM.Android/media-ffmpeg/runtime/ffmpeg-runtime.lock.json
+            app/XDM.Android/transfer-aria2/src/main/jniLibs/x86_64/libaria2c.so
+            app/XDM.Android/transfer-aria2/runtime/aria2-runtime.lock.json
+            app/XDM.Android/media-ffmpeg/runtime/licenses/FFmpeg-LGPL-2.1.txt
+            app/XDM.Android/media-ffmpeg/runtime/licenses/OpenSSL-Apache-2.0.txt
+            app/XDM.Android/transfer-aria2/runtime/licenses/GPL-2.0.txt
+            app/XDM.Android/transfer-aria2/runtime/licenses/SOURCE-NOTICE.txt
           key: ${{ steps.xgo-native-cache.outputs.cache-primary-key }}
+      - name: Upload verified source-built native output for future cross-PR reuse
+        if: steps.native-source.outcome == 'success'
+        uses: actions/upload-artifact@v6
+        with:
+          name: ${{ steps.native-profile.outputs.name }}
+          path: ${{ runner.temp }}/xgo-x86-native-artifact/native-output.zip
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
       - name: Build genuine x86_64 app and instrumentation APKs
         shell: bash
         working-directory: app/XDM.Android
         run: |
           set -euo pipefail
-          ./gradlew --no-daemon --max-workers=2 -Pxdm.requireFfmpegRuntime=true -Pxdm.requireAria2Runtime=true :app:assembleDebug :app:assembleDebugAndroidTest
+          python3 -B ../../scripts/xgo_ci_perf_receipt.py mark gradle_apk start
+          trap 'python3 -B ../../scripts/xgo_ci_perf_receipt.py mark gradle_apk end' EXIT
+          # CI-only, provenance-verified: native Exec tasks skip duplicate builds.
+          # Independent Gradle verify tasks remain mandatory and fail closed.
+          ./gradlew --no-daemon --max-workers=2 -Pxdm.preverifiedNativeRuntime=true -Pxdm.requireFfmpegRuntime=true -Pxdm.requireAria2Runtime=true :app:assembleDebug :app:assembleDebugAndroidTest
       - name: Verify every APK native payload and source-build lock
         shell: bash
         run: >-
@@ -146,6 +244,9 @@ jobs:
           os.close(handle)
           print('XGO_X86_MEDIA_KVM_OPEN_PASS')
           PY_KVM
+      - name: Mark real emulator acceptance start
+        shell: bash
+        run: python3 -B scripts/xgo_ci_perf_receipt.py mark emulator start
       - name: Real API36 x86_64 FFmpeg FFprobe and aria2 instrumented execution
         uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
         with:
@@ -156,7 +257,23 @@ jobs:
           disable-animations: true
           emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
           # A single POSIX command: the action invokes sh -c separately per line.
-          script: python3 -B scripts/xgo_x86_native_media.py emulator --head "$XGO_X86_MEDIA_EXPECTED_HEAD" --evidence "$RUNNER_TEMP/xgo-x86-media"
+          # P01: one POSIX-safe line; three native tests, then four real MP08B3 cases, same API36 emulator.
+          # The second command cannot run when the first fails. Neither may be skipped.
+          script: python3 -B scripts/xgo_x86_native_media.py emulator --head "$XGO_X86_MEDIA_EXPECTED_HEAD" --evidence "$RUNNER_TEMP/xgo-x86-media" && python3 -B scripts/xgo_mp08b3_x86_integration.py run --head "$XGO_X86_MEDIA_EXPECTED_HEAD" --evidence "$RUNNER_TEMP/xgo-x86-media"
+      - name: Write phase timings, native reuse mode and cache diagnostics
+        if: always()
+        shell: bash
+        env:
+          PHASE_JOB_STATUS: ${{ job.status }}
+          XGO_NATIVE_SOURCE_CACHE_HIT: ${{ steps.xgo-native-cache.outputs.cache-hit }}
+        run: |
+          set -euo pipefail
+          if [[ -f "$RUNNER_TEMP/xgo-x86-perf/emulator.start.json" && ! -e "$RUNNER_TEMP/xgo-x86-perf/emulator.end.json" ]]; then
+            python3 -B scripts/xgo_ci_perf_receipt.py mark emulator end
+          fi
+          python3 -B scripts/xgo_ci_perf_receipt.py summary --status "$PHASE_JOB_STATUS"
+          mkdir -p "$RUNNER_TEMP/xgo-x86-media"
+          cp "$RUNNER_TEMP/xgo-x86-perf/performance.json" "$RUNNER_TEMP/xgo-x86-media/performance.json"
       - uses: actions/upload-artifact@v6
         if: always()
         with:

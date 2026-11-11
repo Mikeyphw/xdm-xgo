@@ -31,7 +31,8 @@ def cache_key(abi: str) -> str:
                   'tools/xgo/build_android_xdmcore_x86_64.py']
     args = ', '.join(repr(p) for p in paths)
     # Pin OS, NDK, recipe family and ABI; no broad restore-keys fallbacks.
-    return '${{ runner.os }}-ndk29.0.14206865-' + abi + '-native-v2-${{ hashFiles(' + args + ') }}'
+    family = '-native-v2-licenses-v1-' if abi == 'x86_64' else '-native-v2-'
+    return '${{ runner.os }}-ndk29.0.14206865-' + abi + family + '${{ hashFiles(' + args + ') }}'
 
 
 def cache_steps(abi: str) -> tuple[str, str, str]:
@@ -40,6 +41,18 @@ def cache_steps(abi: str) -> tuple[str, str, str]:
     parent = 'arm64' if abi == 'arm64' else 'x86'
     key = cache_key(abi)
     paths = '\n'.join('            ${{ runner.temp }}/'+parent+'-'+name for name in ('ffmpeg','aria2','openssl'))
+    if abi == 'x86_64':
+        paths += '\n' + '\n'.join('            '+name for name in (
+            'app/XDM.Android/media-ffmpeg/src/main/jniLibs/x86_64/libxdm_ffmpeg.so',
+            'app/XDM.Android/media-ffmpeg/src/main/jniLibs/x86_64/libxdm_ffprobe.so',
+            'app/XDM.Android/media-ffmpeg/runtime/ffmpeg-runtime.lock.json',
+            'app/XDM.Android/transfer-aria2/src/main/jniLibs/x86_64/libaria2c.so',
+            'app/XDM.Android/transfer-aria2/runtime/aria2-runtime.lock.json',
+            'app/XDM.Android/media-ffmpeg/runtime/licenses/FFmpeg-LGPL-2.1.txt',
+            'app/XDM.Android/media-ffmpeg/runtime/licenses/OpenSSL-Apache-2.0.txt',
+            'app/XDM.Android/transfer-aria2/runtime/licenses/GPL-2.0.txt',
+            'app/XDM.Android/transfer-aria2/runtime/licenses/SOURCE-NOTICE.txt',
+        ))
     setup = '''      - name: Initialize {abi} native source and object cache directories
         shell: bash
         run: |

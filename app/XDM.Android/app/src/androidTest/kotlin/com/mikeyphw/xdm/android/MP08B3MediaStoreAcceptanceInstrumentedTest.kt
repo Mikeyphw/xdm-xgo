@@ -85,7 +85,24 @@ class MP08B3MediaStoreAcceptanceInstrumentedTest {
     private fun fixtureBytes(): ByteArray = instrumentationContext.assets
         .open("ffmpeg04/video-only.mp4").use { it.readBytes() }
 
-    private fun seedVerifiedCandidate(content: ByteArray = fixtureBytes()): JSONObject {
+    private fun publicationFixtureBytes(): ByteArray {
+        val video = fixtureBytes()
+        if (video.size >= 1024) return video
+        require(video.size in 8..1016 &&
+            video.copyOfRange(4, 8).contentEquals("ftyp".toByteArray(Charsets.US_ASCII)))
+        // ISO BMFF free box: preserves actual media samples while satisfying
+        // the production broker's unchanged 1024-byte minimum.
+        val freeLength = 1024 - video.size
+        val free = ByteArray(freeLength)
+        free[0] = (freeLength ushr 24).toByte()
+        free[1] = (freeLength ushr 16).toByte()
+        free[2] = (freeLength ushr 8).toByte()
+        free[3] = freeLength.toByte()
+        "free".toByteArray(Charsets.US_ASCII).copyInto(free, 4)
+        return video + free
+    }
+
+    private fun seedVerifiedCandidate(content: ByteArray = publicationFixtureBytes()): JSONObject {
         require(content.size >= 1024)
         val verified = File(context.filesDir, "xgo-mp08b-stage/verified").apply { mkdirs() }
         val output = File(verified, "$captureHash-$destination.mp4")
@@ -118,7 +135,7 @@ class MP08B3MediaStoreAcceptanceInstrumentedTest {
 
     @Test
     fun b3_01RealMediaStorePublicationReadbackAndIdempotency() = runBlocking {
-        val bytes = fixtureBytes()
+        val bytes = publicationFixtureBytes()
         val request = seedVerifiedCandidate(bytes)
         val first = publisher.execute(request)
         val uri = track(first)
@@ -147,7 +164,7 @@ class MP08B3MediaStoreAcceptanceInstrumentedTest {
 
     @Test
     fun b3_02NoAuthorizationAndCorruptedCandidateFailClosed() = runBlocking {
-        val bytes = fixtureBytes()
+        val bytes = publicationFixtureBytes()
         val request = seedVerifiedCandidate(bytes)
         val output = File(context.filesDir, "xgo-mp08b-stage/verified/$captureHash-$destination.mp4")
         output.appendBytes(byteArrayOf(0x7F))
@@ -187,6 +204,7 @@ class MP08B3MediaStoreAcceptanceInstrumentedTest {
         assertFalse(negative.optBoolean("download_ready", true))
         val row = context.contentResolver.query(uri, arrayOf(MediaStore.MediaColumns._ID), null, null, null)
         row?.use { assertFalse("recovered pending item must not survive", it.moveToFirst()) }
+        Unit
     }
 
     @Test

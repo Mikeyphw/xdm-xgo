@@ -94,7 +94,7 @@ def kvm_bootstrap_contract(s):
         'API36 instrumentation, real MediaStore and required attested FFmpeg/FFprobe')
  if [job.index(x) for x in order]!=sorted(job.index(x) for x in order):
   raise AssertionError('MP08B3_SOURCE_REFUSED: KVM bootstrap after emulator')
- bootstrap=job.split('      - name: Enable runner KVM for real API36 instrumentation',1)[1].split('      - uses: actions/setup-java@v4',1)[0]
+ bootstrap=job.split('      - name: Enable runner KVM for real API36 instrumentation',1)[1].split('      - uses: actions/setup-java@v6',1)[0]
  require(bootstrap, ('set -euo pipefail',
    'if [[ ! -c /dev/kvm ]]; then',
    'MP08B3 KVM missing',

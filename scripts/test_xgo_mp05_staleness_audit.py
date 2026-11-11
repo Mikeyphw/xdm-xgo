@@ -6,6 +6,44 @@ from pathlib import Path
 ROOT=Path(__file__).resolve().parents[1]
 ORIGINAL=Path(os.environ.get('XGO_MP05_REAL_REPO',ROOT))
 PARENT='67fad5ed25341b93a24ebd2148d0593655b604b9'
+
+def approved_ci05_node24_upgrade(source: str) -> str:
+ """Transform only approved CI05 Action/cache modernization anchors; refuse drift."""
+ def once(old: str,new: str,reason: str) -> None:
+  nonlocal source
+  if source.count(old)!=1 or new in source:
+   raise AssertionError('MP05_CI05_MODERNIZATION_DRIFT:'+reason)
+  source=source.replace(old,new,1)
+ for old,new,name in (
+    ('actions/setup-node@v4','actions/setup-node@v5','NODE'),
+    ('actions/setup-go@v5','actions/setup-go@v6','GO'),
+    ('actions/setup-java@v4','actions/setup-java@v6','JAVA'),
+    ('gradle/actions/setup-gradle@v4','gradle/actions/setup-gradle@v6','GRADLE')):
+  once(old,new,name)
+ once('''          cache: true
+          cache-dependency-path: engine/go.sum
+''','''          cache: false  # avoid setup-go's shared ~/go tar cache collisions
+      - name: Initialize isolated targeted Go module and build caches
+        if: needs.scope.outputs.needs_go == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          install -d -m 0700 "$RUNNER_TEMP/xgo-targeted-go-mod" "$RUNNER_TEMP/xgo-targeted-go-build"
+          printf 'GOMODCACHE=%s\\n' "$RUNNER_TEMP/xgo-targeted-go-mod" >> "$GITHUB_ENV"
+          printf 'GOCACHE=%s\\n' "$RUNNER_TEMP/xgo-targeted-go-build" >> "$GITHUB_ENV"
+      - name: Restore and save isolated targeted Go cache (Node24)
+        if: needs.scope.outputs.needs_go == 'true'
+        uses: actions/cache@v5
+        with:
+          path: |
+            ${{ runner.temp }}/xgo-targeted-go-mod
+            ${{ runner.temp }}/xgo-targeted-go-build
+          key: ${{ runner.os }}-xgo-targeted-go123-v1-${{ hashFiles('engine/go.mod', 'engine/go.sum') }}
+''','GO_ISOLATED_EXACT')
+ once('      - uses: gradle/actions/setup-gradle@v6\n',
+      '      - uses: gradle/actions/setup-gradle@v6\n        with:\n          cache-provider: basic\n','GRADLE_BASIC')
+ return source
+
 class MP05Stale(unittest.TestCase):
  def baseline(self,p):return subprocess.check_output(['git','show',f'{PARENT}:{p}'],cwd=ORIGINAL)
  def test_original_ffmpeg_broker_unchanged(self):
@@ -36,8 +74,36 @@ class MP05Stale(unittest.TestCase):
   self.assertEqual((ROOT/p).read_bytes(),self.baseline(p))
  def test_original_mp04_contracts_not_silently_rewritten(self):
   for p in ('scripts/test_xgo_mp04_source_contract.py',
-            'engine/media/manifest_selection.go', '.github/workflows/xgo-targeted.yml'):
-   self.assertEqual((ROOT/p).read_bytes(),self.baseline(p))
+            'engine/media/manifest_selection.go'):
+   self.assertEqual((ROOT/p).read_bytes(),self.baseline(p),p)
+  # Reconstruct the ONLY approved CI05 modernization from its real historical
+  # git object. Every other workflow byte and all original MP04 contracts stay
+  # protected. A cache bypass, weakened gate or stale action is a failure.
+  p='.github/workflows/xgo-targeted.yml'
+  legacy=self.baseline(p).decode('utf-8')
+  approved=approved_ci05_node24_upgrade(legacy)
+  self.assertEqual((ROOT/p).read_text(encoding='utf-8'),approved,
+    'CI05 changed outside exact Node24 / isolated Go-cache modernization')
+ def test_ci05_node24_upgrade_fails_closed_on_unapproved_mutations(self):
+  p='.github/workflows/xgo-targeted.yml'
+  approved=approved_ci05_node24_upgrade(self.baseline(p).decode('utf-8'))
+  actual=(ROOT/p).read_text(encoding='utf-8')
+  self.assertEqual(actual,approved)
+  for before,after in (
+    ('actions/setup-node@v5','actions/setup-node@v4'),
+    ('actions/setup-go@v6','actions/setup-go@v5'),
+    ('actions/setup-java@v6','actions/setup-java@v4'),
+    ('gradle/actions/setup-gradle@v6','gradle/actions/setup-gradle@v4'),
+    ('actions/cache@v5','actions/cache@v4'),
+    ('cache: false','cache: true'),
+    ("if: needs.scope.outputs.needs_go == 'true'",'if: always()'),
+    ('test "$SOURCE" = success','echo unsafe-bypass'),
+    ('test "$ANDROID" = success','echo unsafe-bypass'),
+    ('test "$(git rev-parse HEAD)" = "$HEAD_SHA"','echo unpinned'),
+    (':app:compileDebugKotlin',':app:tasks'),
+  ):
+   self.assertIn(before,actual,before)
+   self.assertNotEqual(actual.replace(before,after,1),approved,before)
  def test_inherited_mp04_contract_retargeted_without_weakening(self):
   p='scripts/test_xgo_mp04_staleness_audit.py'
   original=self.baseline(p).decode()

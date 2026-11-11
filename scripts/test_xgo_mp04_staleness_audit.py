@@ -17,7 +17,7 @@ def validate_ci05_contract(code, workflow):
         ('full_go_test', 'subprocess.run(["go", "test", "./..."]', code),
         ('android_classifier', '"needs_android_compile": any(', code),
         ('source_job', 'targeted-source:', workflow),
-        ('setup_go', '- uses: actions/setup-go@v5', workflow),
+        ('setup_go', '- uses: actions/setup-go@v6', workflow),
         ('conditional_go', "if: needs.scope.outputs.needs_go == 'true'", workflow),
         ('go_toolchain', 'go-version-file: engine/go.mod', workflow),
         ('targeted_runner', 'python3 -B scripts/ci/xgo_ci_policy.py run-targeted', workflow),
@@ -35,7 +35,7 @@ def validate_ci05_contract(code, workflow):
     # Ensure the Go setup condition and mandatory run are in the source job,
     # not a dead/commented sibling job. Disallow silent job omissions.
     src=workflow.split('  targeted-source:',1)[-1].split('  targeted-android:',1)[0]
-    if not all(x in src for x in ('- uses: actions/setup-go@v5',
+    if not all(x in src for x in ('- uses: actions/setup-go@v6',
                 "if: needs.scope.outputs.needs_go == 'true'",
                 'python3 -B scripts/ci/xgo_ci_policy.py run-targeted')):
         raise AssertionError('MP04_CI05_STALE_OR_BYPASSED: scoped_go_job')
@@ -84,7 +84,7 @@ class Staleness(unittest.TestCase):
     def test_ci05_negative_missing_go_setup(self):
         code, workflow = ci05_fixtures()
         with self.assertRaisesRegex(AssertionError, 'setup_go'):
-            validate_ci05_contract(code, workflow.replace('actions/setup-go@v5','actions/setup-node@v4'))
+            validate_ci05_contract(code, workflow.replace('actions/setup-go@v6','actions/setup-node@v5'))
     def test_ci05_negative_unconditional_go_setup(self):
         code, workflow = ci05_fixtures()
         with self.assertRaisesRegex(AssertionError, 'conditional_go'):

@@ -117,7 +117,7 @@ class MP05Contracts(unittest.TestCase):
                'tests.update(MP05_PYTHON)', 'subprocess.run(["go", "test", "./..."]',
                '"app/XDM.Android/app/src/"'):
    self.assertIn(item,policy)
-  for item in ('actions/setup-go@v5','go-version-file: engine/go.mod',
+  for item in ('actions/setup-go@v6','go-version-file: engine/go.mod',
                'if: needs.scope.outputs.needs_go', ':app:compileDebugKotlin',
                'test "$SOURCE" = success', 'test "$ANDROID" = success'):
    self.assertIn(item,workflow)

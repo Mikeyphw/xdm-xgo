@@ -28,9 +28,15 @@ class MP07Staleness(unittest.TestCase):
                      'engine/media/hls_vod_session_test.go',
                      'engine/media/hls_map_key_binding_test.go',
                      'scripts/test_xgo_mp06_source_contract.py',
-                     'scripts/test_xgo_mp06_staleness_audit.py',
-                     '.github/workflows/xgo-targeted.yml'):
+                     'scripts/test_xgo_mp06_staleness_audit.py'):
             self.assertEqual((ROOT/path).read_bytes(),self.baseline(path),path)
+        # All inherited MP06 sources remain strictly byte-immutable. CI05 is
+        # different ONLY by its approved Node24 and isolated-cache migration.
+        from test_xgo_mp05_staleness_audit import approved_ci05_node24_upgrade
+        path='.github/workflows/xgo-targeted.yml'
+        baseline=self.baseline(path).decode('utf-8')
+        self.assertEqual((ROOT/path).read_text(encoding='utf-8'),
+                         approved_ci05_node24_upgrade(baseline),path)
     def test_no_existing_phase_tests_removed_or_bypassed(self):
         before=self.baseline('scripts/ci/xgo_ci_policy.py').decode()
         after=(ROOT/'scripts/ci/xgo_ci_policy.py').read_text()
