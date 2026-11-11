@@ -35,7 +35,7 @@ class P01SourceTests(unittest.TestCase):
         self.assertEqual(m.PARENT,'36e8e318305023a8edbc5cff836bfeea2f5c56d6')
         self.assertEqual(len(m.CASES),4)
         self.assertEqual(len(m.NATIVE_CASES),3)
-        self.assertEqual(m.MP08_SOURCE_BLOB,'aa1d5ea1090e4cdeb0d0e526b704a0d01e62d81d')
+        self.assertEqual(m.MP08_SOURCE_BLOB,'a09392d11d3845170423cf0b72b3d7587785df25')
         self.assertEqual(m.CONTRACT_SOURCE_BLOB,'3e06a4a5a726cb68ce4ec2f4ffe250b5adde23fe')
         self.assertIn('require_source()',TARGET.read_text())
 
@@ -127,5 +127,25 @@ class P01SourceTests(unittest.TestCase):
                           'chmod 0777'):
             self.assertNotIn(forbidden,s)
         self.assertIn('shutil.rmtree(out)',s)
+
+    def test_real_publication_fixture_meets_unchanged_broker_minimum(self):
+        # The source MP4 is intentionally tiny (884 bytes), but the production
+        # broker requires >=1024. A genuine ISO BMFF 'free' atom pads the test
+        # fixture without bypassing verification or modifying media samples.
+        source=(ROOT/'app/XDM.Android/app/src/androidTest/kotlin/com/mikeyphw/xdm/android/MP08B3MediaStoreAcceptanceInstrumentedTest.kt').read_text()
+        broker=(ROOT/'app/XDM.Android/app/src/main/kotlin/com/mikeyphw/xdm/android/engine/AndroidMP08PublicationBroker.kt').read_text()
+        asset=(ROOT/'app/XDM.Android/app/src/androidTest/assets/ffmpeg04/video-only.mp4').read_bytes()
+        self.assertEqual(len(asset),884)
+        self.assertEqual(asset[4:8],b'ftyp')
+        self.assertIn('bytes in 1024..MaxPublishBytes',broker)
+        self.assertIn('private fun publicationFixtureBytes(): ByteArray',source)
+        self.assertIn('val freeLength = 1024 - video.size',source)
+        self.assertIn('val free = ByteArray(freeLength)',source)
+        self.assertIn('"free".toByteArray(Charsets.US_ASCII).copyInto(free, 4)',source)
+        self.assertIn('return video + free',source)
+        self.assertEqual(source.count('val bytes = publicationFixtureBytes()'),2)
+        self.assertIn('seedVerifiedCandidate(content: ByteArray = publicationFixtureBytes())',source)
+        self.assertIn('require(content.size >= 1024)',source)
+        self.assertNotIn('val bytes = fixtureBytes()',source)
 
 if __name__=='__main__':unittest.main(verbosity=2)

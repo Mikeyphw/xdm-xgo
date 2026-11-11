@@ -32,7 +32,7 @@ CASES = frozenset((
 NATIVE_CLASS='com.mikeyphw.xdm.android.XgoX86NativeMediaInstrumentedTest'
 NATIVE_CASES=frozenset(('x86_01PinnedFfmpegExecutes','x86_02PinnedFfprobeExecutes',
                         'x86_03SourceBuiltAria2Executes'))
-MP08_SOURCE_BLOB='aa1d5ea1090e4cdeb0d0e526b704a0d01e62d81d'
+MP08_SOURCE_BLOB='a09392d11d3845170423cf0b72b3d7587785df25'
 CONTRACT_SOURCE_BLOB='3e06a4a5a726cb68ce4ec2f4ffe250b5adde23fe'
 
 
