@@ -56,8 +56,31 @@ jobs:
           source /etc/os-release
           test "$ID" = ubuntu
           test "$VERSION_ID" = 24.04
-          sudo apt-get update -qq
-          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg
+          # Prefer the Ubuntu runner's existing packaged FFmpeg 6.1.1. Both
+          # commands must match before skipping APT; no unverifiable runtime.
+          if python3 - <<'PY_FFMPEG_PRECHECK'
+          import re, subprocess
+          for tool in ('ffmpeg', 'ffprobe'):
+              try:
+                  proc = subprocess.run([tool, '-version'], text=True, capture_output=True, timeout=8, check=False)
+              except (OSError, subprocess.TimeoutExpired):
+                  raise SystemExit(1)
+              first = proc.stdout.splitlines()[0] if proc.stdout.splitlines() else ''
+              if proc.returncode or not re.match(rf'^{tool} version 6\.1\.1(?:[-+.]|$)', first):
+                  raise SystemExit(1)
+          print('MP08B3_HOST_FFMPEG_6_1_1_PREINSTALLED_PASS', flush=True)
+          PY_FFMPEG_PRECHECK
+          then
+            echo 'MP08B3_HOST_FFMPEG_APT_SKIPPED: both pinned executables already installed'
+          else
+            echo 'MP08B3_HOST_FFMPEG_APT_REQUIRED: package operations limited to 180s update + 240s install'
+            echo 'MP08B3_HOST_FFMPEG_APT_UPDATE_BEGIN'
+            timeout --signal=TERM --kill-after=8s 180s sudo apt-get update -qq -o Acquire::Retries=1 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -o DPkg::Lock::Timeout=30
+            echo 'MP08B3_HOST_FFMPEG_APT_UPDATE_PASS'
+            echo 'MP08B3_HOST_FFMPEG_APT_INSTALL_BEGIN'
+            timeout --signal=TERM --kill-after=8s 240s sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends ffmpeg -o Acquire::Retries=1 -o Acquire::http::Timeout=25 -o Acquire::https::Timeout=25 -o DPkg::Lock::Timeout=30
+            echo 'MP08B3_HOST_FFMPEG_APT_INSTALL_PASS'
+          fi
           # Reuse MP00's 6.1.1 FFmpeg family, but do not hard-code an Ubuntu
           # package patch revision. Both real executables are required.
           python3 - <<'PY_FFMPEG_PIN'
