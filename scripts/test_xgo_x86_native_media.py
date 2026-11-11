@@ -108,6 +108,19 @@ class X86MediaSourceContracts(unittest.TestCase):
         self.assertIn('GITHUB_EVENT_ACTION: ${{ github.event.action }}',w)
         self.assertIn('xgo-x86-native-media',w)
 
+    def test_x86_native_build_caching_is_abi_separated_and_verified(self):
+        src=WORKFLOW.read_text()
+        job_env=src.split('    env:\n',1)[1].split('    steps:\n',1)[0]
+        self.assertNotIn('runner.temp',job_env)
+        self.assertIn('actions/cache/restore@v4',src)
+        self.assertIn('actions/cache/save@v4',src)
+        self.assertNotIn('restore-keys:',src)
+        self.assertIn('scripts/xgo_x86_native_media.py',src)
+        self.assertIn('tool',src.lower())
+        self.assertLess(src.index('Build and independently verify native FFmpeg'),src.index('Save x86_64 verified native'))
+        self.assertLess(src.index('Save x86_64 verified native'),src.index('Build genuine x86_64 app'))
+        self.assertIn('test_xgo_native_cache_contract.py',src)
+
     def test_three_unskipped_instrumentation_cases_and_no_release_claim(self):
         a=ANDROID.read_text()
         self.assertEqual(len(re.findall(r'(?m)^\s*@Test\s*$',a)),3)

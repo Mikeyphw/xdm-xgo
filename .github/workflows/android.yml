@@ -112,6 +112,28 @@ jobs:
       - uses: gradle/actions/setup-gradle@v4
         with:
           gradle-version: '9.7.1'
+      - name: Initialize arm64 native source and object cache directories
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RUNNER_TEMP:-}" && test -d "$RUNNER_TEMP" || exit 2
+          test -n "${GITHUB_ENV:-}" && test -f "$GITHUB_ENV" || exit 2
+          for directory in arm64-ffmpeg arm64-aria2 arm64-openssl; do
+            install -d -m 0700 "$RUNNER_TEMP/$directory"
+          done
+          printf 'XDM_FFMPEG_BUILD_CACHE=%s\n' "$RUNNER_TEMP/arm64-ffmpeg" >> "$GITHUB_ENV"
+          printf 'XDM_ARIA2_SOURCE_CACHE_DIR=%s\n' "$RUNNER_TEMP/arm64-aria2" >> "$GITHUB_ENV"
+          printf 'XDM_ANDROID_NATIVE_DEPS_CACHE=%s\n' "$RUNNER_TEMP/arm64-openssl" >> "$GITHUB_ENV"
+          echo 'XGO_ARM64_NATIVE_BUILD_CACHE_PATHS_READY'
+      - name: Restore arm64 verified native source and object cache
+        uses: actions/cache/restore@v4
+        id: xgo-native-cache
+        with:
+          path: |
+            ${{ runner.temp }}/arm64-ffmpeg
+            ${{ runner.temp }}/arm64-aria2
+            ${{ runner.temp }}/arm64-openssl
+          key: ${{ runner.os }}-ndk29.0.14206865-arm64-native-v2-${{ hashFiles('app/XDM.Android/media-ffmpeg/runtime/ffmpeg-runtime.json', 'app/XDM.Android/transfer-aria2/runtime/aria2-runtime.json', 'app/XDM.Android/tools/install-ffmpeg-runtime.py', 'app/XDM.Android/tools/build-aria2-runtime.py', 'app/XDM.Android/tools/android_native_openssl.py', 'app/XDM.Android/tools/android_elf_runtime.py') }}
       - name: Static release contracts
         run: |
           python3 tools/validate-xar01-build-provenance.py
@@ -149,6 +171,23 @@ jobs:
       - name: XGO X86 x86_64 APK build-profile regressions
         working-directory: .
         run: python3 -B scripts/test_xgo_x86_64_build_profile.py
+      - name: Produce and verify ARM64 native source-built media before common validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/build-aria2-runtime.py --build-pinned
+          python3 tools/install-ffmpeg-runtime.py --build-pinned
+          python3 tools/verify-aria2-runtime.py --require-payload --require-16kb-alignment --require-source-build
+          python3 tools/verify-ffmpeg-runtime.py --require-payload --require-16kb-alignment
+      - name: Save arm64 verified native source and object cache
+        if: steps.xgo-native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ runner.temp }}/arm64-ffmpeg
+            ${{ runner.temp }}/arm64-aria2
+            ${{ runner.temp }}/arm64-openssl
+          key: ${{ steps.xgo-native-cache.outputs.cache-primary-key }}
       - name: Post-DL03 final common validation
         run: bash tools/run-final-common-validation.sh
       - name: Verify pinned FFmpeg and FFprobe in the debug APK (source attestation and 16 KiB)
@@ -302,11 +341,48 @@ jobs:
           gradle-version: '9.7.1'
       - name: Provision pinned bundletool
         run: echo "BUNDLETOOL_JAR=$(python3 tools/ensure-bundletool.py --print-path)" >> "$GITHUB_ENV"
+      - name: Initialize arm64 native source and object cache directories
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RUNNER_TEMP:-}" && test -d "$RUNNER_TEMP" || exit 2
+          test -n "${GITHUB_ENV:-}" && test -f "$GITHUB_ENV" || exit 2
+          for directory in arm64-ffmpeg arm64-aria2 arm64-openssl; do
+            install -d -m 0700 "$RUNNER_TEMP/$directory"
+          done
+          printf 'XDM_FFMPEG_BUILD_CACHE=%s\n' "$RUNNER_TEMP/arm64-ffmpeg" >> "$GITHUB_ENV"
+          printf 'XDM_ARIA2_SOURCE_CACHE_DIR=%s\n' "$RUNNER_TEMP/arm64-aria2" >> "$GITHUB_ENV"
+          printf 'XDM_ANDROID_NATIVE_DEPS_CACHE=%s\n' "$RUNNER_TEMP/arm64-openssl" >> "$GITHUB_ENV"
+          echo 'XGO_ARM64_NATIVE_BUILD_CACHE_PATHS_READY'
+      - name: Restore arm64 verified native source and object cache
+        uses: actions/cache/restore@v4
+        id: xgo-native-cache
+        with:
+          path: |
+            ${{ runner.temp }}/arm64-ffmpeg
+            ${{ runner.temp }}/arm64-aria2
+            ${{ runner.temp }}/arm64-openssl
+          key: ${{ runner.os }}-ndk29.0.14206865-arm64-native-v2-${{ hashFiles('app/XDM.Android/media-ffmpeg/runtime/ffmpeg-runtime.json', 'app/XDM.Android/transfer-aria2/runtime/aria2-runtime.json', 'app/XDM.Android/tools/install-ffmpeg-runtime.py', 'app/XDM.Android/tools/build-aria2-runtime.py', 'app/XDM.Android/tools/android_native_openssl.py', 'app/XDM.Android/tools/android_elf_runtime.py') }}
       - name: Build pinned ARM64 aria2 runtime from source
         run: |
           python3 tools/build-aria2-runtime.py --build-pinned
       - name: Build pinned FFmpeg runtime
         run: python3 tools/install-ffmpeg-runtime.py --build-pinned
+      - name: Verify both ARM64 native source-built runtimes before cache save
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/verify-aria2-runtime.py --require-payload --require-16kb-alignment --require-source-build
+          python3 tools/verify-ffmpeg-runtime.py --require-payload --require-16kb-alignment
+      - name: Save arm64 verified native source and object cache
+        if: steps.xgo-native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ runner.temp }}/arm64-ffmpeg
+            ${{ runner.temp }}/arm64-aria2
+            ${{ runner.temp }}/arm64-openssl
+          key: ${{ steps.xgo-native-cache.outputs.cache-primary-key }}
       - name: Fetch provenance-pinned previous release fixture
         env:
           XDM_PREVIOUS_RELEASE_APK_URL: ${{ secrets.XDM_PREVIOUS_RELEASE_APK_URL }}

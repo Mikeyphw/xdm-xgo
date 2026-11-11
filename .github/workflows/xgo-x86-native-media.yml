@@ -23,9 +23,6 @@ jobs:
       GITHUB_EVENT_ACTION: ${{ github.event.action }}
       XGO_X86_MEDIA_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
       XDM_FFMPEG_AUTO_INSTALL_HOST_TOOLS: '0'
-      XDM_FFMPEG_BUILD_CACHE: ${{ runner.temp }}/x86-ffmpeg
-      XDM_ARIA2_SOURCE_CACHE_DIR: ${{ runner.temp }}/x86-aria2
-      XDM_ANDROID_NATIVE_DEPS_CACHE: ${{ runner.temp }}/x86-openssl
     steps:
       - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
         with:
@@ -49,6 +46,19 @@ jobs:
           test "$OWNER" = "$GITHUB_REPOSITORY"
           test "$LABEL_NAME" = xgo-x86-native-media
           git merge-base --is-ancestor "$BASE_SHA" "$HEAD_SHA"
+      - name: Initialize x86_64 native source and object cache directories
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RUNNER_TEMP:-}" && test -d "$RUNNER_TEMP" || exit 2
+          test -n "${GITHUB_ENV:-}" && test -f "$GITHUB_ENV" || exit 2
+          for directory in x86-ffmpeg x86-aria2 x86-openssl; do
+            install -d -m 0700 "$RUNNER_TEMP/$directory"
+          done
+          printf 'XDM_FFMPEG_BUILD_CACHE=%s\n' "$RUNNER_TEMP/x86-ffmpeg" >> "$GITHUB_ENV"
+          printf 'XDM_ARIA2_SOURCE_CACHE_DIR=%s\n' "$RUNNER_TEMP/x86-aria2" >> "$GITHUB_ENV"
+          printf 'XDM_ANDROID_NATIVE_DEPS_CACHE=%s\n' "$RUNNER_TEMP/x86-openssl" >> "$GITHUB_ENV"
+          echo 'XGO_X86_64_NATIVE_BUILD_CACHE_PATHS_READY'
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -57,6 +67,7 @@ jobs:
         run: |
           set -euo pipefail
           python3 -B scripts/test_xgo_x86_native_media.py
+          python3 -B scripts/test_xgo_native_cache_contract.py
           python3 -B scripts/xgo_x86_native_media.py check
       - uses: actions/setup-java@v4
         with:
@@ -77,6 +88,15 @@ jobs:
       - name: Test-only pinned x86_64 source profile (NEVER committed)
         shell: bash
         run: python3 -B scripts/xgo_x86_native_media.py prepare --head "$XGO_X86_MEDIA_EXPECTED_HEAD"
+      - name: Restore x86_64 verified native source and object cache
+        uses: actions/cache/restore@v4
+        id: xgo-native-cache
+        with:
+          path: |
+            ${{ runner.temp }}/x86-ffmpeg
+            ${{ runner.temp }}/x86-aria2
+            ${{ runner.temp }}/x86-openssl
+          key: ${{ runner.os }}-ndk29.0.14206865-x86_64-native-v2-${{ hashFiles('app/XDM.Android/media-ffmpeg/runtime/ffmpeg-runtime.json', 'app/XDM.Android/transfer-aria2/runtime/aria2-runtime.json', 'app/XDM.Android/tools/install-ffmpeg-runtime.py', 'app/XDM.Android/tools/build-aria2-runtime.py', 'app/XDM.Android/tools/android_native_openssl.py', 'app/XDM.Android/tools/android_elf_runtime.py', 'scripts/xgo_x86_native_media.py', 'scripts/xgo_x86_64_profile.py', 'tools/xgo/build_android_xdmcore_x86_64.py') }}
       - name: Build and independently verify native FFmpeg FFprobe and aria2
         shell: bash
         working-directory: app/XDM.Android
@@ -86,6 +106,15 @@ jobs:
           python3 -B tools/build-aria2-runtime.py --build-pinned --jobs 2
           python3 -B tools/verify-ffmpeg-runtime.py --require-payload --require-16kb-alignment
           python3 -B tools/verify-aria2-runtime.py --require-payload --require-16kb-alignment --require-source-build
+      - name: Save x86_64 verified native source and object cache
+        if: steps.xgo-native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            ${{ runner.temp }}/x86-ffmpeg
+            ${{ runner.temp }}/x86-aria2
+            ${{ runner.temp }}/x86-openssl
+          key: ${{ steps.xgo-native-cache.outputs.cache-primary-key }}
       - name: Build genuine x86_64 app and instrumentation APKs
         shell: bash
         working-directory: app/XDM.Android
