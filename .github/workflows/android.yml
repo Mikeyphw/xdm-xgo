@@ -38,8 +38,9 @@ jobs:
         working-directory: app/XDM.Android
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
+          package-manager-cache: false
           node-version: '22'
       - name: Static release contracts (no SDK, NDK or Gradle)
         shell: bash
@@ -97,21 +98,45 @@ jobs:
         working-directory: app/XDM.Android
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
       - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
         with:
           packages: 'platform-tools'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
+          package-manager-cache: false
           node-version: '22'
       - name: Install pinned Android SDK and NDK
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;${XDM_ANDROID_NDK_VERSION}"
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
         with:
+          cache-provider: basic
           gradle-version: '9.7.1'
+      - name: Initialize arm64 native source and object cache directories
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RUNNER_TEMP:-}" && test -d "$RUNNER_TEMP" || exit 2
+          test -n "${GITHUB_ENV:-}" && test -f "$GITHUB_ENV" || exit 2
+          for directory in arm64-ffmpeg arm64-aria2 arm64-openssl; do
+            install -d -m 0700 "$RUNNER_TEMP/$directory"
+          done
+          printf 'XDM_FFMPEG_BUILD_CACHE=%s\n' "$RUNNER_TEMP/arm64-ffmpeg" >> "$GITHUB_ENV"
+          printf 'XDM_ARIA2_SOURCE_CACHE_DIR=%s\n' "$RUNNER_TEMP/arm64-aria2" >> "$GITHUB_ENV"
+          printf 'XDM_ANDROID_NATIVE_DEPS_CACHE=%s\n' "$RUNNER_TEMP/arm64-openssl" >> "$GITHUB_ENV"
+          echo 'XGO_ARM64_NATIVE_BUILD_CACHE_PATHS_READY'
+      - name: Restore arm64 verified native source and object cache
+        uses: actions/cache/restore@v5
+        id: xgo-native-cache
+        with:
+          path: |
+            ${{ runner.temp }}/arm64-ffmpeg
+            ${{ runner.temp }}/arm64-aria2
+            ${{ runner.temp }}/arm64-openssl
+          key: ${{ runner.os }}-ndk29.0.14206865-arm64-native-v2-${{ hashFiles('app/XDM.Android/media-ffmpeg/runtime/ffmpeg-runtime.json', 'app/XDM.Android/transfer-aria2/runtime/aria2-runtime.json', 'app/XDM.Android/tools/install-ffmpeg-runtime.py', 'app/XDM.Android/tools/build-aria2-runtime.py', 'app/XDM.Android/tools/android_native_openssl.py', 'app/XDM.Android/tools/android_elf_runtime.py') }}
       - name: Static release contracts
         run: |
           python3 tools/validate-xar01-build-provenance.py
@@ -149,6 +174,23 @@ jobs:
       - name: XGO X86 x86_64 APK build-profile regressions
         working-directory: .
         run: python3 -B scripts/test_xgo_x86_64_build_profile.py
+      - name: Produce and verify ARM64 native source-built media before common validation
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/build-aria2-runtime.py --build-pinned
+          python3 tools/install-ffmpeg-runtime.py --build-pinned
+          python3 tools/verify-aria2-runtime.py --require-payload --require-16kb-alignment --require-source-build
+          python3 tools/verify-ffmpeg-runtime.py --require-payload --require-16kb-alignment
+      - name: Save arm64 verified native source and object cache
+        if: steps.xgo-native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ${{ runner.temp }}/arm64-ffmpeg
+            ${{ runner.temp }}/arm64-aria2
+            ${{ runner.temp }}/arm64-openssl
+          key: ${{ steps.xgo-native-cache.outputs.cache-primary-key }}
       - name: Post-DL03 final common validation
         run: bash tools/run-final-common-validation.sh
       - name: Verify pinned FFmpeg and FFprobe in the debug APK (source attestation and 16 KiB)
@@ -165,13 +207,13 @@ jobs:
             --test app/XDM.Android/app/build/outputs/apk/androidTest/debug/app-debug-androidTest.apk \
             --out "$RUNNER_TEMP/xdm-apk-pair"
       - name: Upload both APKs with one SHA256 source receipt (not device-tested)
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: xdm-android-physical-arm64-apk-pair
           path: ${{ runner.temp }}/xdm-apk-pair/
           retention-days: 14
           if-no-files-found: error
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: xdm-android-debug-artifacts
           path: |
@@ -189,15 +231,16 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
       - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
         with:
           packages: 'platform-tools'
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
         with:
+          cache-provider: basic
           gradle-version: '9.7.1'
       - name: Provision Cinderbox-proven API36 Google APIs image
         shell: bash
@@ -249,7 +292,7 @@ jobs:
           script: bash app/XDM.Android/tools/run-hosted-emulator-instrumentation.sh --device
       - name: Upload bounded hosted instrumentation crash evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: xdm-hosted-instrumentation-evidence
           path: ${{ runner.temp }}/xdm-instrumentation-evidence/
@@ -279,15 +322,16 @@ jobs:
       XDM_XAR16_FULL_RELEASE_GATE: "1"
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
       - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
         with:
           packages: 'platform-tools'
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
+          package-manager-cache: false
           node-version: '22'
       - name: Restore release keystore
         env:
@@ -297,16 +341,54 @@ jobs:
           printf '%s' "$XDM_RELEASE_KEYSTORE_BASE64" | base64 -d > "$XDM_RELEASE_STORE_FILE"
       - name: Install pinned Android SDK and NDK
         run: sdkmanager "platforms;android-36" "build-tools;36.0.0" "ndk;${XDM_ANDROID_NDK_VERSION}"
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
         with:
+          cache-provider: basic
           gradle-version: '9.7.1'
       - name: Provision pinned bundletool
         run: echo "BUNDLETOOL_JAR=$(python3 tools/ensure-bundletool.py --print-path)" >> "$GITHUB_ENV"
+      - name: Initialize arm64 native source and object cache directories
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RUNNER_TEMP:-}" && test -d "$RUNNER_TEMP" || exit 2
+          test -n "${GITHUB_ENV:-}" && test -f "$GITHUB_ENV" || exit 2
+          for directory in arm64-ffmpeg arm64-aria2 arm64-openssl; do
+            install -d -m 0700 "$RUNNER_TEMP/$directory"
+          done
+          printf 'XDM_FFMPEG_BUILD_CACHE=%s\n' "$RUNNER_TEMP/arm64-ffmpeg" >> "$GITHUB_ENV"
+          printf 'XDM_ARIA2_SOURCE_CACHE_DIR=%s\n' "$RUNNER_TEMP/arm64-aria2" >> "$GITHUB_ENV"
+          printf 'XDM_ANDROID_NATIVE_DEPS_CACHE=%s\n' "$RUNNER_TEMP/arm64-openssl" >> "$GITHUB_ENV"
+          echo 'XGO_ARM64_NATIVE_BUILD_CACHE_PATHS_READY'
+      - name: Restore arm64 verified native source and object cache
+        uses: actions/cache/restore@v5
+        id: xgo-native-cache
+        with:
+          path: |
+            ${{ runner.temp }}/arm64-ffmpeg
+            ${{ runner.temp }}/arm64-aria2
+            ${{ runner.temp }}/arm64-openssl
+          key: ${{ runner.os }}-ndk29.0.14206865-arm64-native-v2-${{ hashFiles('app/XDM.Android/media-ffmpeg/runtime/ffmpeg-runtime.json', 'app/XDM.Android/transfer-aria2/runtime/aria2-runtime.json', 'app/XDM.Android/tools/install-ffmpeg-runtime.py', 'app/XDM.Android/tools/build-aria2-runtime.py', 'app/XDM.Android/tools/android_native_openssl.py', 'app/XDM.Android/tools/android_elf_runtime.py') }}
       - name: Build pinned ARM64 aria2 runtime from source
         run: |
           python3 tools/build-aria2-runtime.py --build-pinned
       - name: Build pinned FFmpeg runtime
         run: python3 tools/install-ffmpeg-runtime.py --build-pinned
+      - name: Verify both ARM64 native source-built runtimes before cache save
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/verify-aria2-runtime.py --require-payload --require-16kb-alignment --require-source-build
+          python3 tools/verify-ffmpeg-runtime.py --require-payload --require-16kb-alignment
+      - name: Save arm64 verified native source and object cache
+        if: steps.xgo-native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ${{ runner.temp }}/arm64-ffmpeg
+            ${{ runner.temp }}/arm64-aria2
+            ${{ runner.temp }}/arm64-openssl
+          key: ${{ steps.xgo-native-cache.outputs.cache-primary-key }}
       - name: Fetch provenance-pinned previous release fixture
         env:
           XDM_PREVIOUS_RELEASE_APK_URL: ${{ secrets.XDM_PREVIOUS_RELEASE_APK_URL }}
@@ -366,7 +448,7 @@ jobs:
           script: bash app/XDM.Android/tools/run-hosted-emulator-instrumentation.sh --signed-release
       - name: Upload bounded hosted release instrumentation crash evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: xdm-hosted-release-instrumentation-evidence
           path: ${{ runner.temp }}/xdm-instrumentation-evidence/
@@ -379,7 +461,7 @@ jobs:
             app/XDM.Android/build/release/publication/SHA256SUMS
             app/XDM.Android/build/release/publication/SHA512SUMS
             app/XDM.Android/build/release/publication/release-metadata.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v6
         with:
           name: xdm-android-signed-release
           path: app/XDM.Android/build/release/publication/**/*
@@ -394,7 +476,7 @@ jobs:
     timeout-minutes: 75
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
@@ -410,8 +492,9 @@ jobs:
           sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?}}"
           bash app/XDM.Android/tools/provision-hosted-emulator-runtime.sh --verify "$sdk_root"
           test -d "$sdk_root/system-images/android-36/google_apis/x86_64"
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
         with:
+          cache-provider: basic
           gradle-version: '9.7.1'
       - name: Require hardware KVM
         shell: bash
@@ -436,7 +519,7 @@ jobs:
           script: bash app/XDM.Android/tools/run-hosted-emulator-compatibility.sh
       - name: Upload XP02B browser-intake emulator test evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: xdm-emulator-browser-intake-test-results
           path: |
@@ -447,7 +530,7 @@ jobs:
           if-no-files-found: warn
       - name: Upload bounded emulator persistence test evidence
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: xdm-emulator-persistence-test-results
           path: |
@@ -488,13 +571,14 @@ jobs:
     timeout-minutes: 95
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '21'
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@v6
         with:
           go-version-file: engine/go.mod
+          cache-dependency-path: engine/go.sum
       - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
         with:
           packages: 'platform-tools'
@@ -507,8 +591,9 @@ jobs:
           sdk_root="${ANDROID_SDK_ROOT:-${ANDROID_HOME:?}}"
           bash app/XDM.Android/tools/provision-hosted-emulator-runtime.sh --verify "$sdk_root"
           test -x "$sdk_root/ndk/${XDM_ANDROID_NDK_VERSION}/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android26-clang"
-      - uses: gradle/actions/setup-gradle@v4
+      - uses: gradle/actions/setup-gradle@v6
         with:
+          cache-provider: basic
           gradle-version: '9.7.1'
       - name: Prepare isolated x86_64 Gradle packaging profile
         run: python3 -B scripts/xgo_x86_64_profile.py --prepare
@@ -534,7 +619,7 @@ jobs:
           script: XGO_X86_TEST_EXPLICIT_OPT_IN=yes bash scripts/run_xgo_x86_64_emulator.sh
       - name: Upload opt-in x86_64 APK and JNI execution receipt
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: xdm-android-x86_64-apk-and-jni-evidence
           path: ${{ runner.temp }}/xdm-x86_64-apk/

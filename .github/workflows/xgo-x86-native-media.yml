@@ -1,0 +1,166 @@
+# Opt-in media native test lane only. This workflow is NEVER a release gate.
+name: XGO x86_64 Native Media Runtime (opt-in only)
+on:
+  pull_request:
+    types: [labeled]
+permissions:
+  contents: read
+concurrency:
+  group: xgo-x86-native-media-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  x86-native-media:
+    name: Exact-head x86_64 FFmpeg FFprobe aria2 source build and API36 runtime
+    if: >-
+      github.event_name == 'pull_request' && github.event.action == 'labeled' &&
+      github.event.label.name == 'xgo-x86-native-media' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.repository == 'Mikeyphw/xdm-xgo'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 360
+    env:
+      XGO_X86_MEDIA_OPT_IN: 'yes'
+      GITHUB_EVENT_ACTION: ${{ github.event.action }}
+      XGO_X86_MEDIA_EXPECTED_HEAD: ${{ github.event.pull_request.head.sha }}
+      XDM_FFMPEG_AUTO_INSTALL_HOST_TOOLS: '0'
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Exact-head stacked PR and opt-in provenance
+        shell: bash
+        env:
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          OWNER: ${{ github.event.pull_request.head.repo.full_name }}
+          LABEL_NAME: ${{ github.event.label.name }}
+        run: |
+          set -euo pipefail
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$HEAD_SHA"
+          test "$BASE_SHA" = fbda3835e5a252df577d1ce8676a39768cf8de22
+          test "$BASE_BRANCH" = feature/xgo-mp08b3-real-media-acceptance-20261110
+          test "$OWNER" = "$GITHUB_REPOSITORY"
+          test "$LABEL_NAME" = xgo-x86-native-media
+          git merge-base --is-ancestor "$BASE_SHA" "$HEAD_SHA"
+      - name: Initialize x86_64 native source and object cache directories
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -n "${RUNNER_TEMP:-}" && test -d "$RUNNER_TEMP" || exit 2
+          test -n "${GITHUB_ENV:-}" && test -f "$GITHUB_ENV" || exit 2
+          for directory in x86-ffmpeg x86-aria2 x86-openssl; do
+            install -d -m 0700 "$RUNNER_TEMP/$directory"
+          done
+          printf 'XDM_FFMPEG_BUILD_CACHE=%s\n' "$RUNNER_TEMP/x86-ffmpeg" >> "$GITHUB_ENV"
+          printf 'XDM_ARIA2_SOURCE_CACHE_DIR=%s\n' "$RUNNER_TEMP/x86-aria2" >> "$GITHUB_ENV"
+          printf 'XDM_ANDROID_NATIVE_DEPS_CACHE=%s\n' "$RUNNER_TEMP/x86-openssl" >> "$GITHUB_ENV"
+          echo 'XGO_X86_64_NATIVE_BUILD_CACHE_PATHS_READY'
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Static source, security and negative-mutation contracts
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B scripts/test_xgo_x86_native_media.py
+          python3 -B scripts/test_xgo_native_cache_contract.py
+          python3 -B scripts/xgo_x86_native_media.py check
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: engine/go.mod
+          cache-dependency-path: engine/go.sum
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
+      - uses: gradle/actions/setup-gradle@v6
+        with:
+          cache-provider: basic
+      - name: Install pinned toolchain and real source-build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'platform-tools' 'emulator' 'system-images;android-36;google_apis;x86_64' 'ndk;29.0.14206865'
+          sudo apt-get update -qq
+          sudo env DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends build-essential pkg-config perl nasm yasm autoconf automake libtool cmake make
+      - name: Test-only pinned x86_64 source profile (NEVER committed)
+        shell: bash
+        run: python3 -B scripts/xgo_x86_native_media.py prepare --head "$XGO_X86_MEDIA_EXPECTED_HEAD"
+      - name: Restore x86_64 verified native source and object cache
+        uses: actions/cache/restore@v5
+        id: xgo-native-cache
+        with:
+          path: |
+            ${{ runner.temp }}/x86-ffmpeg
+            ${{ runner.temp }}/x86-aria2
+            ${{ runner.temp }}/x86-openssl
+          key: ${{ runner.os }}-ndk29.0.14206865-x86_64-native-v2-${{ hashFiles('app/XDM.Android/media-ffmpeg/runtime/ffmpeg-runtime.json', 'app/XDM.Android/transfer-aria2/runtime/aria2-runtime.json', 'app/XDM.Android/tools/install-ffmpeg-runtime.py', 'app/XDM.Android/tools/build-aria2-runtime.py', 'app/XDM.Android/tools/android_native_openssl.py', 'app/XDM.Android/tools/android_elf_runtime.py', 'scripts/xgo_x86_native_media.py', 'scripts/xgo_x86_64_profile.py', 'tools/xgo/build_android_xdmcore_x86_64.py') }}
+      - name: Build and independently verify native FFmpeg FFprobe and aria2
+        shell: bash
+        working-directory: app/XDM.Android
+        run: |
+          set -euo pipefail
+          python3 -B tools/install-ffmpeg-runtime.py --build-pinned --jobs 2
+          python3 -B tools/build-aria2-runtime.py --build-pinned --jobs 2
+          python3 -B tools/verify-ffmpeg-runtime.py --require-payload --require-16kb-alignment
+          python3 -B tools/verify-aria2-runtime.py --require-payload --require-16kb-alignment --require-source-build
+      - name: Save x86_64 verified native source and object cache
+        if: steps.xgo-native-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: |
+            ${{ runner.temp }}/x86-ffmpeg
+            ${{ runner.temp }}/x86-aria2
+            ${{ runner.temp }}/x86-openssl
+          key: ${{ steps.xgo-native-cache.outputs.cache-primary-key }}
+      - name: Build genuine x86_64 app and instrumentation APKs
+        shell: bash
+        working-directory: app/XDM.Android
+        run: |
+          set -euo pipefail
+          ./gradlew --no-daemon --max-workers=2 -Pxdm.requireFfmpegRuntime=true -Pxdm.requireAria2Runtime=true :app:assembleDebug :app:assembleDebugAndroidTest
+      - name: Verify every APK native payload and source-build lock
+        shell: bash
+        run: >-
+          python3 -B scripts/xgo_x86_native_media.py verify-apk
+          --head "$XGO_X86_MEDIA_EXPECTED_HEAD"
+          --apk app/XDM.Android/app/build/outputs/apk/debug/app-debug.apk
+          --receipt "$RUNNER_TEMP/xgo-x86-media/native-media-receipt.json"
+      - name: Enable KVM and confirm actual guest support
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -c /dev/kvm
+          if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
+            sudo chown "$(id -u):$(id -g)" /dev/kvm
+            sudo chmod 0600 /dev/kvm
+          fi
+          python3 - <<'PY_KVM'
+          import os
+          handle=os.open('/dev/kvm',os.O_RDWR|os.O_CLOEXEC)
+          os.close(handle)
+          print('XGO_X86_MEDIA_KVM_OPEN_PASS')
+          PY_KVM
+      - name: Real API36 x86_64 FFmpeg FFprobe and aria2 instrumented execution
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          force-avd-creation: true
+          disable-animations: true
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          # A single POSIX command: the action invokes sh -c separately per line.
+          script: python3 -B scripts/xgo_x86_native_media.py emulator --head "$XGO_X86_MEDIA_EXPECTED_HEAD" --evidence "$RUNNER_TEMP/xgo-x86-media"
+      - uses: actions/upload-artifact@v6
+        if: always()
+        with:
+          name: xgo-x86-native-media-evidence-not-arm64
+          path: ${{ runner.temp }}/xgo-x86-media/
+          retention-days: 7
+          if-no-files-found: error

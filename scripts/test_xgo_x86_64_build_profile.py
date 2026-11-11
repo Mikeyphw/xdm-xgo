@@ -115,7 +115,8 @@ class X86SourceAndIntegrity(unittest.TestCase):
         self.assertIn('emulator-compatibility:', s)
         self.assertIn('xdm-emulator-browser-intake-test-results', s)
         self.assertIn('xdm-emulator-persistence-test-results', s)
-        self.assertIn('run_physical_arm64_instrumentation.sh', s)
+        self.assertTrue((ROOT / 'scripts/run_physical_arm64_instrumentation.sh').is_file())
+        self.assertNotIn('run_physical_arm64_instrumentation.sh', app_job)
 
     def test_x86_builder_declares_real_ndk_and_no_fallback_arch(self):
         b=load('tools/xgo/build_android_xdmcore_x86_64.py', 'x86builder')
