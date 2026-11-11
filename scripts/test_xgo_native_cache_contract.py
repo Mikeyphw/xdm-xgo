@@ -30,6 +30,36 @@ def bash_block(text: str,name: str) -> str:
     return '\n'.join(line[10:] for line in match.group(1).splitlines())+'\n'
 
 
+
+
+def verify_x86_license_cache_inventory(source: str, key: str) -> None:
+    """Fail closed on incomplete cache restores, old keys, or path drift."""
+    from xgo_native_cache_patch import cache_key
+    restore_name = '      - name: Restore x86_64 verified native source and object cache\n'
+    build_name = '      - name: Build and independently verify native FFmpeg FFprobe and aria2\n'
+    save_name = '      - name: Save x86_64 verified native source and object cache\n'
+    upload_name = '      - name: Upload verified source-built native output for future cross-PR reuse\n'
+    if any(source.count(name) != 1 for name in (restore_name,build_name,save_name,upload_name)):
+        raise ValueError('XGO_NATIVE_CACHE_MISSING_STEPS')
+    restore = source.split(restore_name,1)[1].split(build_name,1)[0]
+    save = source.split(save_name,1)[1].split(upload_name,1)[0]
+    license_files = (
+        'app/XDM.Android/media-ffmpeg/runtime/licenses/FFmpeg-LGPL-2.1.txt',
+        'app/XDM.Android/media-ffmpeg/runtime/licenses/OpenSSL-Apache-2.0.txt',
+        'app/XDM.Android/transfer-aria2/runtime/licenses/GPL-2.0.txt',
+        'app/XDM.Android/transfer-aria2/runtime/licenses/SOURCE-NOTICE.txt',
+    )
+    if key != cache_key('x86_64') or '-native-v2-licenses-v1-' not in key:
+        raise ValueError('XGO_NATIVE_CACHE_STALE_LICENSE_KEY')
+    if restore.count('key: '+key+'\n') != 1 or 'restore-keys:' in restore:
+        raise ValueError('XGO_NATIVE_CACHE_WRONG_SOURCE_KEY')
+    if save.count('key: ${{ steps.xgo-native-cache.outputs.cache-primary-key }}') != 1:
+        raise ValueError('XGO_NATIVE_CACHE_SAVE_NOT_KEY_BOUND')
+    for license_path in license_files:
+        expected = '            '+license_path+'\n'
+        if restore.count(expected) != 1 or save.count(expected) != 1:
+            raise ValueError('XGO_NATIVE_CACHE_MISSING_LICENSE:'+license_path)
+
 class NativeCachingTests(unittest.TestCase):
     def test_x86_job_level_env_never_uses_runner_context(self):
         src=WORKFLOW.read_text()
@@ -123,6 +153,35 @@ jobs:
         self.assertEqual(output.count('actions/cache/save@v5'),2)
         for bad in (fixture.replace('signed-release:','release:'),fixture.replace('Build pinned ARM64','Build random ARM64'),fixture.replace('Post-DL03 final common validation','Altered validation'),fixture+fixture,output):
             with self.assertRaisesRegex(ValueError,'DRIFT|ALREADY_APPLIED'):m.patch_arm64_workflow(bad)
+
+    def test_x86_cache_license_assets_and_strict_new_cache_key(self):
+        src=WORKFLOW.read_text()
+        generator=load()
+        key=generator.cache_key('x86_64')
+        self.assertIn('licenses-v1',key)
+        self.assertNotIn('licenses-v1',generator.cache_key('arm64'))
+        verify_x86_license_cache_inventory(src,key)
+        generated_restore=generator.cache_steps('x86_64')[1]
+        for path in (
+            'FFmpeg-LGPL-2.1.txt','OpenSSL-Apache-2.0.txt',
+            'GPL-2.0.txt','SOURCE-NOTICE.txt',
+        ):
+            self.assertIn(path,generated_restore)
+
+    def test_x86_cache_license_negative_mutations(self):
+        src=WORKFLOW.read_text()
+        key=load().cache_key('x86_64')
+        verify_x86_license_cache_inventory(src,key)
+        for violation in (
+           src.replace('FFmpeg-LGPL-2.1.txt','UNSAFE-DROPPED',1),
+           src.replace('OpenSSL-Apache-2.0.txt','UNSAFE-DROPPED',1),
+           src.replace('GPL-2.0.txt','UNSAFE-DROPPED',1),
+           src.replace('SOURCE-NOTICE.txt','UNSAFE-DROPPED',1),
+           src.replace('-native-v2-licenses-v1-','-native-v2-',1),
+           src.replace('key: ${{ steps.xgo-native-cache.outputs.cache-primary-key }}','key: stale',1),
+        ):
+            with self.assertRaises(ValueError):
+                verify_x86_license_cache_inventory(violation,key)
 
     def test_x86_restoration_and_save_only_after_verified_native_outputs(self):
         src=WORKFLOW.read_text()

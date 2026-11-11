@@ -142,7 +142,11 @@ jobs:
             app/XDM.Android/media-ffmpeg/runtime/ffmpeg-runtime.lock.json
             app/XDM.Android/transfer-aria2/src/main/jniLibs/x86_64/libaria2c.so
             app/XDM.Android/transfer-aria2/runtime/aria2-runtime.lock.json
-          key: ${{ runner.os }}-ndk29.0.14206865-x86_64-native-v2-${{ hashFiles('app/XDM.Android/media-ffmpeg/runtime/ffmpeg-runtime.json', 'app/XDM.Android/transfer-aria2/runtime/aria2-runtime.json', 'app/XDM.Android/tools/install-ffmpeg-runtime.py', 'app/XDM.Android/tools/build-aria2-runtime.py', 'app/XDM.Android/tools/android_native_openssl.py', 'app/XDM.Android/tools/android_elf_runtime.py', 'scripts/xgo_x86_native_media.py', 'scripts/xgo_x86_64_profile.py', 'tools/xgo/build_android_xdmcore_x86_64.py') }}
+            app/XDM.Android/media-ffmpeg/runtime/licenses/FFmpeg-LGPL-2.1.txt
+            app/XDM.Android/media-ffmpeg/runtime/licenses/OpenSSL-Apache-2.0.txt
+            app/XDM.Android/transfer-aria2/runtime/licenses/GPL-2.0.txt
+            app/XDM.Android/transfer-aria2/runtime/licenses/SOURCE-NOTICE.txt
+          key: ${{ runner.os }}-ndk29.0.14206865-x86_64-native-v2-licenses-v1-${{ hashFiles('app/XDM.Android/media-ffmpeg/runtime/ffmpeg-runtime.json', 'app/XDM.Android/transfer-aria2/runtime/aria2-runtime.json', 'app/XDM.Android/tools/install-ffmpeg-runtime.py', 'app/XDM.Android/tools/build-aria2-runtime.py', 'app/XDM.Android/tools/android_native_openssl.py', 'app/XDM.Android/tools/android_elf_runtime.py', 'scripts/xgo_x86_native_media.py', 'scripts/xgo_x86_64_profile.py', 'tools/xgo/build_android_xdmcore_x86_64.py') }}
       - name: Build and independently verify native FFmpeg FFprobe and aria2
         id: native-source
         shell: bash
@@ -194,6 +198,10 @@ jobs:
             app/XDM.Android/media-ffmpeg/runtime/ffmpeg-runtime.lock.json
             app/XDM.Android/transfer-aria2/src/main/jniLibs/x86_64/libaria2c.so
             app/XDM.Android/transfer-aria2/runtime/aria2-runtime.lock.json
+            app/XDM.Android/media-ffmpeg/runtime/licenses/FFmpeg-LGPL-2.1.txt
+            app/XDM.Android/media-ffmpeg/runtime/licenses/OpenSSL-Apache-2.0.txt
+            app/XDM.Android/transfer-aria2/runtime/licenses/GPL-2.0.txt
+            app/XDM.Android/transfer-aria2/runtime/licenses/SOURCE-NOTICE.txt
           key: ${{ steps.xgo-native-cache.outputs.cache-primary-key }}
       - name: Upload verified source-built native output for future cross-PR reuse
         if: steps.native-source.outcome == 'success'
