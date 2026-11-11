@@ -187,6 +187,7 @@ class MP08B3MediaStoreAcceptanceInstrumentedTest {
         assertFalse(negative.optBoolean("download_ready", true))
         val row = context.contentResolver.query(uri, arrayOf(MediaStore.MediaColumns._ID), null, null, null)
         row?.use { assertFalse("recovered pending item must not survive", it.moveToFirst()) }
+        Unit
     }
 
     @Test

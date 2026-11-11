@@ -35,7 +35,7 @@ class P01SourceTests(unittest.TestCase):
         self.assertEqual(m.PARENT,'36e8e318305023a8edbc5cff836bfeea2f5c56d6')
         self.assertEqual(len(m.CASES),4)
         self.assertEqual(len(m.NATIVE_CASES),3)
-        self.assertEqual(m.MP08_SOURCE_BLOB,'b124e2f34bb653cc786df61387f03fd39ef9747c')
+        self.assertEqual(m.MP08_SOURCE_BLOB,'aa1d5ea1090e4cdeb0d0e526b704a0d01e62d81d')
         self.assertEqual(m.CONTRACT_SOURCE_BLOB,'eeb644a2a56c8cf6774b38a6ffac651dd0557263')
         self.assertIn('require_source()',TARGET.read_text())
 
