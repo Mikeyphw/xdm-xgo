@@ -63,7 +63,7 @@ def main() -> None:
     check('sdkmanager ' not in fast and 'setup-gradle@' not in fast and
           'gradle wrapper' not in fast and 'setup-android@' not in fast,
           'fast job accidentally performs full Android provisioning')
-    check('sdkmanager "platforms;android-36"' in heavy and 'gradle/actions/setup-gradle@v4' in heavy,
+    check('sdkmanager "platforms;android-36"' in heavy and 'gradle/actions/setup-gradle@v6' in heavy and 'gradle/actions/setup-gradle@v4' not in heavy,
           'full Android SDK/Gradle job has been weakened')
     check('bash tools/run-final-common-validation.sh' in heavy,
           'full Android unit/compile/lint/packaging gate removed')
