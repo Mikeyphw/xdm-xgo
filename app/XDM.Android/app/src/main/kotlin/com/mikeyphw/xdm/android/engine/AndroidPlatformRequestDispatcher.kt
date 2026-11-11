@@ -17,7 +17,9 @@ internal class AndroidPlatformRequestDispatcher(
     private val mediaBroker: () -> AndroidMediaPlatformBroker?,
     private val manifestFetcher: AndroidAuthorizedManifestFetcher,
     private val fragmentStore: AndroidDurableFragmentStore,
+    private val mp09LiveStore: AndroidLiveDurableFragmentStore,
     private val mp08Broker: AndroidMP08VerifiedStageBroker,
+    private val mp09StageBroker: AndroidLiveMP08VerifiedStageBroker,
     private val mp08Publication: AndroidMP08PublicationBroker,
 ) {
     private val mediaToolScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -152,7 +154,8 @@ internal class AndroidPlatformRequestDispatcher(
         // assemble_verified is MP08B1's FFmpeg entry. Publication/readback
         // are deliberately separate typed actions, never arbitrary filesystem IO.
         val result = if (payload.optString("action") == "assemble_verified") {
-            mp08Broker.execute(payload)
+            if (payload.optString("source") in setOf("hls_live", "dash_live"))
+                mp09StageBroker.execute(payload) else mp08Broker.execute(payload)
         } else {
             mp08Publication.execute(payload)
         }
@@ -164,7 +167,8 @@ internal class AndroidPlatformRequestDispatcher(
     }
 
     private fun fragmentStoreReply(requestId: Long, session: Long, payload: JSONObject): JSONObject {
-        val result = fragmentStore.execute(payload)
+        val result = if (payload.optBoolean("mp09_live", false)) mp09LiveStore.execute(payload)
+            else fragmentStore.execute(payload)
         return if (result.optBoolean("ok", false)) successReply(requestId, session, result)
             else errorReply(requestId, session, result.optString("error_code", "fragment_store_refused"))
     }

@@ -111,16 +111,16 @@ func (f *mp09AndroidFetcher) FetchDASH(ctx context.Context, req media.DASHFetchR
 }
 
 type mp09AndroidStore struct {
-	base    *androidFragmentStoreAdapter
+	base    *mp09FragmentStoreAdapter
 	records map[string]media.FragmentRecord
 }
 
 func newMP09AndroidStore(inv *Invocation, captureID, role string) (*mp09AndroidStore, error) {
-	raw, e := newAndroidFragmentStoreAdapter(inv, captureID)
+	raw, e := newMP09FragmentStoreAdapter(inv, captureID)
 	if e != nil {
 		return nil, e
 	}
-	store := raw.(*androidFragmentStoreAdapter)
+	store := raw.(*mp09FragmentStoreAdapter)
 	store.roleHint = role
 	return &mp09AndroidStore{base: store, records: make(map[string]media.FragmentRecord)}, nil
 }
@@ -131,7 +131,7 @@ func (s *mp09AndroidStore) use(inv *Invocation) { s.base.inv = inv }
 // must be explicitly qualified before restoring such fragments in-place.
 func (s *mp09AndroidStore) preflightNoUnboundJournal(ctx context.Context) error {
 	raw, _ := json.Marshal(map[string]any{
-		"action": "inventory", "capture_id": s.base.captureID, "track_role": "all",
+		"action": "inventory", "capture_id": s.base.captureID, "track_role": "all", "mp09_live": true,
 	})
 	reply, err := s.base.inv.PlatformRequest(ctx, platform.AndroidFragmentStore, platform.Refs{}, raw)
 	if err != nil || !reply.OK || len(reply.Payload) > 512<<10 {
@@ -186,7 +186,7 @@ func (s *mp09AndroidStore) ReadVerified(id media.FragmentIdentity) ([]byte, erro
 		}
 		raw, _ := json.Marshal(map[string]any{"action": "read_chunk", "capture_id": s.base.captureID,
 			"fragment_id": key, "generation": rec.AttemptGeneration, "hash": rec.Hash,
-			"expected_length": rec.ExpectedLength, "offset": offset, "length": chunk})
+			"expected_length": rec.ExpectedLength, "offset": offset, "length": chunk, "mp09_live": true})
 		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 		reply, ee := s.base.inv.PlatformRequest(ctx, platform.AndroidFragmentStore, platform.Refs{}, raw)
 		cancel()
@@ -394,7 +394,7 @@ type mp09AndroidCleaner struct {
 }
 
 func (c *mp09AndroidCleaner) DiscardAndVerify(ctx context.Context, records []media.FragmentRecord) error {
-	raw, _ := json.Marshal(map[string]any{"action": "discard_capture", "capture_id": c.capture})
+	raw, _ := json.Marshal(map[string]any{"action": "discard_capture", "capture_id": c.capture, "mp09_live": true})
 	result, e := c.inv.PlatformRequest(ctx, platform.AndroidFragmentStore, platform.Refs{}, raw)
 	if e != nil || !result.OK {
 		return media.ErrMP09Cleanup

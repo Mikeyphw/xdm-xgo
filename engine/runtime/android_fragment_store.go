@@ -22,7 +22,6 @@ const mp05MaxBridgeFragmentBytes = 2 << 20
 type androidFragmentStoreAdapter struct {
 	inv       *Invocation
 	captureID string
-	roleHint string // MP09 per-track inventory only; never emitted in public receipt
 }
 
 func newAndroidFragmentStoreAdapter(inv *Invocation, captureID string) (media.DurableFragmentSink, error) {
@@ -73,7 +72,6 @@ func (a *androidFragmentStoreAdapter) WriteAndCommitFragment(ctx context.Context
 		"action": "write", "capture_id": a.captureID, "fragment_id": id,
 		"generation": rec.AttemptGeneration, "role": rec.Role, "expected_length": int64(len(bytes)),
 		"hash": hash, "body_base64": base64.StdEncoding.EncodeToString(bytes),
-        "identity":rec.Identity, "track_role":a.roleHint,
 	})
 	if err != nil {
 		return media.FragmentRecord{}, err

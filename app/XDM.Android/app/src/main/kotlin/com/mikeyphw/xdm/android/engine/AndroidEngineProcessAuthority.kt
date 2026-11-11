@@ -222,7 +222,12 @@ class AndroidEngineProcessAuthority(context: Context) {
             { (appContext as? AndroidMediaPlatformBrokerProvider)?.androidMediaPlatformBrokerOrNull() },
             AndroidAuthorizedManifestFetcher(appContext),
             AndroidDurableFragmentStore(appContext),
+            AndroidLiveDurableFragmentStore(appContext),
             AndroidMP08VerifiedStageBroker(
+                appContext,
+                com.mikeyphw.xdm.android.media.ffmpeg.EmbeddedFfmpegRuntime(appContext),
+            ),
+            AndroidLiveMP08VerifiedStageBroker(
                 appContext,
                 com.mikeyphw.xdm.android.media.ffmpeg.EmbeddedFfmpegRuntime(appContext),
             ),

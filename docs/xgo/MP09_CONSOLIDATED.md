@@ -32,3 +32,15 @@ The private service entry point is not yet wired to the production Compose picke
 - **Packaging:** mandatory three independent offline audits and source-pin drift negatives; local 10-test Go harness and Kotlin service syntax compilation against stubs are distinct from, and cannot substitute for, repository Go tests or a real Android build.
 
 **Still not delivered/qualified:** full API36 instrumented foreground lifecycle, production Compose picker wiring, automatic process-death replay with media-source fingerprint, physical ARM64 capture, Android 15/16 service-budget behavior and published-byte equivalence. Do not describe HF01 as fully implemented, user-releasable, or media-qualified until those checks are completed on the actual repository commit.
+
+
+## HF02: Restore MP05–MP08 inherited source contracts
+
+HF02 is one hotfix commit on consolidated PR #28. MP05 Go and Kotlin storage adapters are
+restored *byte-for-byte* to their exact PR #27 parents so earlier regression tests
+remain meaningful. Dedicated MP09 Go/Android fragment-store and MP08 staging adapters
+store live fragments in the isolated app-private `xgo-fragments-mp09` journal and
+route by explicit `mp09_live=true` / typed `hls_live` or `dash_live` markers.
+The legacy MP05 route, JNI broker, and original MP08 stage remain present.
+Source CI passing does not qualify API36 or physical ARM64 recording.
+Production picker and automatic process-death resume remain separate open gaps.
