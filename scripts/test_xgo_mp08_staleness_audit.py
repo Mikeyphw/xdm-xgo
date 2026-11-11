@@ -25,18 +25,23 @@ class MP08StaleContracts(unittest.TestCase):
  def test_legacy_ffmpeg_probe_and_publication_contract_untouched(self):
   for p in ('engine/media/ffmpeg.go','engine/media/ffmpeg_test.go',
             'app/XDM.Android/media-ffmpeg/src/main/kotlin/com/mikeyphw/xdm/android/media/ffmpeg/FfmpegPostProcessor.kt',
-            'app/XDM.Android/media-ffmpeg/src/main/kotlin/com/mikeyphw/xdm/android/media/ffmpeg/FfmpegMediaVerifier.kt',
-            '.github/workflows/xgo-targeted.yml'):
+            'app/XDM.Android/media-ffmpeg/src/main/kotlin/com/mikeyphw/xdm/android/media/ffmpeg/FfmpegMediaVerifier.kt'):
    self.assertEqual(self.source(p),self.baseline(p),p)
+  # All historical media contracts remain unchanged. CI05 must equal the
+  # single approved Node24 modernization of the exact MP08 Git baseline.
+  from test_xgo_mp05_staleness_audit import approved_ci05_node24_upgrade
+  p='.github/workflows/xgo-targeted.yml'
+  self.assertEqual(self.source(p).decode('utf-8'),
+                   approved_ci05_node24_upgrade(self.baseline(p).decode('utf-8')),p)
  def test_inherited_mp07_audit_has_only_exact_approved_mp08_exception(self):
   path='scripts/test_xgo_mp07_staleness_audit.py'
   self.assertNotEqual(self.source(path),self.baseline(path))
   # Derived from an exact, source-blob-pinned single insertion. Future edits
   # cannot disable MP07's original immutable CI-registry comparison.
   self.assertEqual(hashlib.sha256(self.source(path)).hexdigest(),
-      '28c23fe6721eb8c37f7c33c8e0979391c92d1d648bd10eb4175ccb9a8b0bd84a')
+      '3f64f14f2924b1e40da50ff8dd9e94439c8a3b2a0d59cdd422ecb8214d440725')
   text=self.source(path).decode()
-  for required in ('mp08_block', 'after.count(mp08_block)',
+  for required in ('approved_ci05_node24_upgrade', 'mp08_block', 'after.count(mp08_block)',
                    "after=after.replace(mp08_block,'',1)",
                    "self.assertEqual(after.replace('MP07_PYTHON"):
    self.assertIn(required,text)
