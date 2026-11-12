@@ -37,6 +37,7 @@ data class AndroidMediaUiCommandResult(
     val manifestSelectionPlan: ManifestSelectionV1Contract.Plan? = null,
     val nextPollAfterMs: Long = 3_000L,
     val allTracksEnded: Boolean = false,
+    val recoveryFragments: Int = 0,
 )
 
 internal object AndroidMediaUiWire {
@@ -147,6 +148,7 @@ internal object AndroidMediaUiWire {
         manifestGraph = payload.optJSONObject("manifest_graph")?.let(ManifestGraphV1Contract::decode),
         manifestRevision = payload.optString("manifest_revision").takeIf { Regex("[0-9a-f]{64}").matches(it) },
         manifestSelectionPlan = payload.optJSONObject("manifest_selection_plan")?.let(ManifestSelectionV1Contract::decode),
+        recoveryFragments = payload.optInt("recovery_fragments", 0).coerceIn(0, 4096),
     )
 
     fun captureJson(record: MediaCaptureRecord): JSONObject = JSONObject()

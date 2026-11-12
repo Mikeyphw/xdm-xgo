@@ -77,6 +77,15 @@ class AndroidMediaUiClient(private val context: Context) {
         return submit("android.media.execute", requestId, "execute", AndroidMediaUiWire.executePayload(requestId, captureId))
     }
 
+    /** Read-only recovery review or explicit orphan cleanup, never auto-resume. */
+    suspend fun liveAction(captureId: String, action: String): AndroidMediaUiCommandResult {
+        require(action in setOf("inspect_recovery", "discard_recovery"))
+        val requestId = "media-${UUID.randomUUID()}"
+        return submit("android.media.live", requestId, "live", org.json.JSONObject()
+            .put("client_request_id", requestId).put("capture_id", captureId)
+            .put("action", action))
+    }
+
     /** Read-only Go HLS/DASH discovery; the existing Kotlin executor remains authoritative. */
     suspend fun resolveManifest(
         captureId: String,

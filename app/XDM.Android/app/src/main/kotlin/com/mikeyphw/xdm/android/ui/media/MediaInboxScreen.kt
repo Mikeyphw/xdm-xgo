@@ -35,6 +35,8 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.mikeyphw.xdm.android.engine.AndroidMediaUiClient
 import com.mikeyphw.xdm.android.engine.AndroidMediaUiCommandResult
+import com.mikeyphw.xdm.android.engine.AndroidLiveRecordingService
+import com.mikeyphw.xdm.android.engine.AndroidLiveSelectionGate
 import com.mikeyphw.xdm.android.engine.ManifestSelectionV1Contract
 import com.mikeyphw.xdm.android.media.MediaBatchInputParser
 import com.mikeyphw.xdm.android.media.MediaBatchUrlDisposition
@@ -86,6 +88,9 @@ fun MediaInboxScreen(
     var inspectingManifest by remember { mutableStateOf<String?>(null) }
     var manifestReview by remember { mutableStateOf<AndroidMediaUiCommandResult?>(null) }
     var manifestChoice by remember { mutableStateOf(ManifestSelectionV1Contract.Request()) }
+    var liveFeedback by remember { mutableStateOf<String?>(null) }
+    var recoveryCaptureId by remember { mutableStateOf<String?>(null) }
+    var recoveryFragments by remember { mutableStateOf(0) }
     val onInspectGoManifest: (MediaCaptureRecord) -> Unit = { capture ->
         if (inspectingManifest == null) {
             inspectingManifest = capture.id
@@ -97,6 +102,56 @@ fun MediaInboxScreen(
                         errorCode = "manifest_inspection_unavailable") }
                 inspectingManifest = null
             }
+        }
+    }
+    // A fresh revision-bound Go manifest is required immediately before every
+    // user-initiated foreground recording. No signed URL is saved to UI state.
+    val onStartLive: () -> Unit = start@{
+        val reviewed = manifestReview ?: return@start
+        val id = reviewed.captureId ?: return@start
+        val revision = reviewed.manifestRevision ?: return@start
+        if (inspectingManifest != null) return@start
+        val requested = manifestChoice
+        inspectingManifest = id
+        inspectScope.launch {
+            try {
+                val fresh = goManifestClient.resolveManifest(id, requested, revision)
+                val selection = AndroidLiveSelectionGate.fromFreshManifest(id, revision, requested, fresh)
+                val destination = "live_" + java.util.UUID.randomUUID().toString().replace("-", "")
+                val intent = Intent(context, AndroidLiveRecordingService::class.java).apply {
+                    action = AndroidLiveRecordingService.START
+                    putExtra(AndroidLiveRecordingService.CAPTURE, id)
+                    putExtra(AndroidLiveRecordingService.DESTINATION, destination)
+                    putExtra(AndroidLiveRecordingService.PROTOCOL, selection.protocol)
+                    putExtra(AndroidLiveRecordingService.VIDEO, selection.videoUrl)
+                    putExtra(AndroidLiveRecordingService.AUDIO, selection.audioUrl)
+                    putExtra(AndroidLiveRecordingService.VIDEO_REP, selection.videoRepresentationId)
+                    putExtra(AndroidLiveRecordingService.AUDIO_REP, selection.audioRepresentationId)
+                    putExtra(AndroidLiveRecordingService.REQUIRE_AUDIO, selection.requireAudio)
+                }
+                AndroidLiveRecordingService.start(context, intent)
+                manifestReview = null
+                liveFeedback = "Live recording requested. Controls are in the foreground notification."
+            } catch (_: Exception) {
+                liveFeedback = "Live recording not started. Recheck an unprotected live HLS playlist with separate audio and MP4 selection. DASH and embedded-audio mapping are not yet UI-qualified."
+            } finally { inspectingManifest = null }
+        }
+    }
+    val onReviewInterrupted: (MediaCaptureRecord) -> Unit = review@{ capture ->
+        if (inspectingManifest != null) return@review
+        inspectingManifest = capture.id
+        inspectScope.launch {
+            try {
+                val result = goManifestClient.liveAction(capture.id, "inspect_recovery")
+                if (!result.ok) liveFeedback = "Interrupted recording review unavailable. Capture may need renewed authorization."
+                else if (result.status == "recording_active") liveFeedback = "This capture is currently recording; use its notification controls."
+                else if (result.recoveryFragments == 0) liveFeedback = "No interrupted recording fragments found for this capture."
+                else {
+                    recoveryCaptureId = capture.id
+                    recoveryFragments = result.recoveryFragments
+                }
+            } catch (_: Exception) { liveFeedback = "Recovery review unavailable; no files were changed." }
+            finally { inspectingManifest = null }
         }
     }
     var batchText by rememberSaveable { mutableStateOf("") }
@@ -277,6 +332,7 @@ fun MediaInboxScreen(
                                 onCancelEmbeddedFfmpeg = onCancelEmbeddedFfmpeg,
                                 onResolve = onResolve,
                                 onInspectManifest = onInspectGoManifest,
+                                onReviewInterrupted = onReviewInterrupted,
                                 onSelectVariant = onSelectVariant,
                                 onTrackSelectionChanged = onTrackSelectionChanged,
                                 onRemove = onRemove,
@@ -302,6 +358,7 @@ fun MediaInboxScreen(
                             onCancelEmbeddedFfmpeg = onCancelEmbeddedFfmpeg,
                             onResolve = onResolve,
                             onInspectManifest = onInspectGoManifest,
+                            onReviewInterrupted = onReviewInterrupted,
                             onSelectVariant = onSelectVariant,
                             onTrackSelectionChanged = onTrackSelectionChanged,
                             onRemove = onRemove,
@@ -356,7 +413,28 @@ fun MediaInboxScreen(
                 }
             },
             onClose = { manifestReview = null },
+            onStartLive = onStartLive,
         )
+    }
+    liveFeedback?.let { message ->
+        AlertDialog(onDismissRequest = { liveFeedback = null },
+            title = { Text("Live recording") }, text = { Text(message) },
+            confirmButton = { TextButton(onClick = { liveFeedback = null }) { Text("OK") } })
+    }
+    recoveryCaptureId?.let { id ->
+        AlertDialog(onDismissRequest = { recoveryCaptureId = null },
+            title = { Text("Review interrupted recording") },
+            text = { Text("$recoveryFragments verified stored fragments remain. This is not a completed video. Discard permanently deletes these fragments; recording is not resumed automatically.") },
+            confirmButton = { TextButton(onClick = {
+                recoveryCaptureId = null
+                inspectScope.launch {
+                    val result = runCatching { goManifestClient.liveAction(id, "discard_recovery") }.getOrNull()
+                    liveFeedback = if (result?.ok == true && result.status == "discarded_verified")
+                        "Interrupted fragments were removed and verified." else
+                        "Cleanup was not confirmed; stored fragments were not marked removed."
+                }
+            }) { Text("Discard fragments") } },
+            dismissButton = { TextButton(onClick = { recoveryCaptureId = null }) { Text("Keep") } })
     }
     if (inspectingManifest != null) {
         AlertDialog(
@@ -375,6 +453,7 @@ private fun Mp03ManifestReviewDialog(
     onSelectionChange: (ManifestSelectionV1Contract.Request) -> Unit,
     onVerify: () -> Unit,
     onClose: () -> Unit,
+    onStartLive: () -> Unit,
 ) {
     val graph = result.manifestGraph
     val plan = result.manifestSelectionPlan
@@ -395,9 +474,15 @@ private fun Mp03ManifestReviewDialog(
                     item { Text("Download intent") }
                     item {
                         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            for (pair in listOf("best_video" to "Video + audio", "video_only" to "Video only", "audio_only" to "Audio only")) {
+                            for (pair in (listOf("best_video" to "Video + audio", "video_only" to "Video only", "audio_only" to "Audio only") +
+                                if (graph.kind in setOf("live", "event")) listOf("live_recording" to "Record live") else emptyList())) {
                                 FilterChip(selected = selection.intent == pair.first,
-                                    onClick = { onSelectionChange(selection.copy(intent = pair.first, videoId = if (pair.first == "audio_only") null else selection.videoId, audioId = if (pair.first == "video_only") null else selection.audioId)) },
+                                    onClick = { onSelectionChange(selection.copy(intent = pair.first,
+                                        videoId = if (pair.first == "audio_only") null else selection.videoId,
+                                        audioId = if (pair.first == "video_only") null else selection.audioId,
+                                        container = if (pair.first == "live_recording") "mp4" else selection.container,
+                                        subtitlePolicy = if (pair.first == "live_recording") "disabled" else selection.subtitlePolicy,
+                                        subtitleId = if (pair.first == "live_recording") null else selection.subtitleId)) },
                                     label = { Text(pair.second) })
                             }
                         }
@@ -455,7 +540,17 @@ private fun Mp03ManifestReviewDialog(
                 }
             }
         },
-        confirmButton = { TextButton(onClick = onVerify, enabled = graph != null && !graph.protectedMedia) { Text("Verify selection") } },
+        confirmButton = {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                if (graph != null && graph.kind in setOf("live", "event") && selection.intent == "live_recording") {
+                    TextButton(onClick = onStartLive,
+                        enabled = plan != null && plan.intent == "live_recording" && plan.graphRevision == result.manifestRevision && !graph.protectedMedia) {
+                        Text("Start live recording")
+                    }
+                }
+                TextButton(onClick = onVerify, enabled = graph != null && !graph.protectedMedia) { Text("Verify selection") }
+            }
+        },
         dismissButton = { TextButton(onClick = onClose) { Text("Close") } },
     )
 }

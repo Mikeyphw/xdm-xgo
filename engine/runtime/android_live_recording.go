@@ -238,7 +238,42 @@ func (e *Engine) androidMediaLiveHandler(ctx context.Context, inv *Invocation, e
 	var status media.MP09RecordingStatus
 	var err error
 	switch req.Action {
-	case "start":
+    case "inspect_recovery":
+        // Read-only review after process death. No network fetch, and no
+        // credential, fragment ID, file path or URL returned to the UI.
+        if _, scopeErr := e.androidMedia.manifestRoot(req.CaptureID); scopeErr != nil {
+            return failed("capture_not_registered")
+        }
+        if active != nil {
+            return emitAndroidMediaResult(inv, req.ClientRequestID, "live", true,
+                map[string]any{"capture_id": req.CaptureID, "status": "recording_active", "recovery_fragments": 0, "download_ready": false})
+        }
+        raw, _ := json.Marshal(map[string]any{"action": "inventory", "capture_id": req.CaptureID,
+            "track_role": "all", "mp09_live": true})
+        reply, reviewErr := inv.PlatformRequest(ctx, platform.AndroidFragmentStore, platform.Refs{}, raw)
+        if reviewErr != nil || !reply.OK { return failed("recovery_inventory_unavailable") }
+        n, reviewErr := mp09ReviewRecoveryInventory(reply.Payload)
+        if reviewErr != nil { return failed("recovery_integrity_refused") }
+        statusValue := "no_recovery"
+        if n > 0 { statusValue = "recovery_review_required" }
+        return emitAndroidMediaResult(inv, req.ClientRequestID, "live", true,
+            map[string]any{"capture_id": req.CaptureID, "status": statusValue,
+                "recovery_fragments": n, "download_ready": false})
+    case "discard_recovery":
+        // Only a separately confirmed UI action can discard orphan fragments.
+        // Never allow this route to cancel an active recording.
+        if active != nil { return failed("active_recording_discard_denied") }
+        if _, scopeErr := e.androidMedia.manifestRoot(req.CaptureID); scopeErr != nil {
+            return failed("capture_not_registered")
+        }
+        cleaner := &mp09AndroidCleaner{inv: inv, capture: req.CaptureID}
+        if cleanErr := cleaner.DiscardAndVerify(ctx, nil); cleanErr != nil {
+            return failed("recovery_cleanup_not_confirmed")
+        }
+        return emitAndroidMediaResult(inv, req.ClientRequestID, "live", true,
+            map[string]any{"capture_id": req.CaptureID, "status": "discarded_verified",
+                "recovery_fragments": 0, "download_ready": false})
+    case "start":
 		if active != nil {
 			return failed("already_recording")
 		}
