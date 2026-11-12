@@ -20,6 +20,9 @@ import org.json.JSONObject
  * No raw URL, header, body, redirect or exception text is logged.
  */
 class AndroidAuthorizedManifestFetcher(private val context: Context) {
+    // Only allowlisted status classes and bounded integer Retry-After cross
+    // the native bridge; signed URLs and HTTP error bodies never do.
+    private class SafeHttpFailure(val code: String, val retryAfterSeconds: Long) : RuntimeException()
     private val maxBody = 2 * 1024 * 1024
     private val maxRedirects = 5
     private val allowedHeaders = setOf("authorization", "cookie", "referer", "user-agent", "origin",
@@ -62,6 +65,8 @@ class AndroidAuthorizedManifestFetcher(private val context: Context) {
                 .put("redirects", JSONArray(response.redirects))
                 .put("content_type", response.contentType)
                 .put("expires_at_epoch_ms", handoff.expiresAtEpochMs)
+        } catch (failure: SafeHttpFailure) {
+            rejected(failure.code).put("retry_after_seconds", failure.retryAfterSeconds)
         } catch (_: Throwable) {
             rejected("manifest_fetch_failed")
         }
@@ -127,7 +132,18 @@ class AndroidAuthorizedManifestFetcher(private val context: Context) {
                         if (rangeLength != null && bytes.size().toLong() != rangeLength) error("range_length_invalid")
                         return Response(bytes.toByteArray(), url, redirects.toList(), connection.contentType.orEmpty())
                     }
-                    else -> error("manifest_status_denied")
+                    else -> {
+                        val status = connection.responseCode
+                        val allowed = setOf(401, 403, 404, 410, 416, 429, 500, 502, 503, 504)
+                        if (status in allowed) {
+                            val retry = if (status == 429 || status == 503)
+                                connection.getHeaderField("Retry-After")?.trim()?.toLongOrNull()
+                                    ?.takeIf { it in 1L..300L } ?: 0L
+                                else 0L
+                            throw SafeHttpFailure("http_$status", retry)
+                        }
+                        error("manifest_status_denied")
+                    }
                 }
             } finally { connection.disconnect() }
         }

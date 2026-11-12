@@ -6,7 +6,7 @@ package com.mikeyphw.xdm.android.engine
  * Every transition and the notification's allowed actions use the same state.
  */
 internal class AndroidMP09RecordingLifecycleState {
-    enum class Phase { New, Starting, Recording, Pausing, Paused, Resuming, Saving, Discarding, Review, Saved, Discarded }
+    enum class Phase { New, Starting, Recording, Pausing, Paused, Resuming, Saving, Discarding, Refreshing, Review, Saved, Discarded }
     enum class Control { Pause, Resume, StopSave, Discard }
     private var current = Phase.New
 
@@ -37,6 +37,19 @@ internal class AndroidMP09RecordingLifecycleState {
     }
 
     @Synchronized fun canPoll(): Boolean = current == Phase.Recording
+
+    // Only a user-reviewed interruption can invoke an explicit reauthorization.
+    // This never upgrades an unverified Go/MP05 recording to DownloadReady.
+    @Synchronized fun beginAuthorizationRefresh(): Boolean {
+        if (current != Phase.Review) return false
+        current = Phase.Refreshing
+        return true
+    }
+    @Synchronized fun completeAuthorizationRefresh(acceptedByGo: Boolean): Phase {
+        if (current != Phase.Refreshing) return current
+        current = if (acceptedByGo) Phase.Recording else Phase.Review
+        return current
+    }
 
     @Synchronized fun begin(action: Control, dvrVerified: Boolean): Boolean {
         val next = when (action) {

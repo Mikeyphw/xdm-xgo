@@ -20,6 +20,7 @@ def check(service:str, gate:str, go:str) -> None:
         'result.status == "paused"', 'result.status == "capturing"',
         'if (poller == null) poller = scope.launch { pollLoop(id) }',
         'lifecycle.interrupted()', 'Stale recording control refused',
+        'lifecycle.beginAuthorizationRefresh()', 'lifecycle.completeAuthorizationRefresh(accepted)',
         'reportTerminalFailure("Recording could not start',
         'stopSelf()', 'onTimeout(startId: Int, fgsType: Int)',
         'if (AndroidMP09RecordingLifecycleState.Control.Pause in actions)',
@@ -29,7 +30,7 @@ def check(service:str, gate:str, go:str) -> None:
     )
     for token in must_service:
         if token not in service:raise AssertionError('MP09_LIFECYCLE_SERVICE_MISSING '+token)
-    if service.count('commandMutex.withLock') != 3:
+    if service.count('commandMutex.withLock') != 4:
         raise AssertionError('MP09_LIFECYCLE_COMMAND_SERIALIZATION_COUNT')
     for forbidden in ('private var paused', 'stopping.set(', 'result.ok && action == "pause"',
                       'if (poller != null || stopping.get())'):
@@ -37,6 +38,7 @@ def check(service:str, gate:str, go:str) -> None:
     must_gate=('enum class Phase', 'enum class Control', '@Synchronized fun beginStart()',
                '@Synchronized fun begin(action:', '@Synchronized fun complete(action:',
                '@Synchronized fun available(dvrVerified:', 'if (current != expected) return current',
+               'Phase.Refreshing', 'beginAuthorizationRefresh()', 'completeAuthorizationRefresh(',
                'Phase.Review', 'Phase.Saved', 'Phase.Discarded',
                'Control.Pause -> if (dvrVerified', 'Control.Resume -> if (dvrVerified')
     for token in must_gate:

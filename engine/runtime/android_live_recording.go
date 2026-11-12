@@ -41,6 +41,11 @@ type mp09LiveCommand struct {
 	VideoOptionID        string `json:"video_option_id"`
 	AudioOptionID        string `json:"audio_option_id"`
 	ExpectedRevision     string `json:"expected_revision"`
+	RefreshedRootURL      string `json:"refreshed_root_url"`
+	RefreshedVideoURL     string `json:"refreshed_video_url"`
+	RefreshedAudioURL     string `json:"refreshed_audio_url"`
+	RefreshApproved       bool   `json:"refresh_approved"`
+	RefreshGeneration     uint64 `json:"refresh_generation"`
 }
 
 type mp09AndroidRecording struct {
@@ -86,9 +91,33 @@ func (f *mp09AndroidFetcher) fetch(ctx context.Context, urlValue string, kind st
 	}
 	raw, _ := json.Marshal(payload)
 	reply, e := f.inv.PlatformRequest(ctx, platform.ManifestFetch, platform.Refs{}, raw)
-	if e != nil || !reply.OK {
-		return nil, errMP09Android
-	}
+    if e != nil { return nil, errMP09Android }
+    if !reply.OK {
+        // Only a bounded, allowlisted status survives the platform boundary.
+        // The untrusted body, URL and headers must never enter Go logs/events.
+        reason := reply.ErrorCode
+        var failure struct {
+            ErrorCode string `json:"error_code"`
+            RetryAfterSeconds int64 `json:"retry_after_seconds"`
+        }
+        if len(reply.Payload) > 0 && len(reply.Payload) <= 2048 &&
+            json.Unmarshal(reply.Payload, &failure) == nil && failure.ErrorCode != "" {
+            reason = failure.ErrorCode
+        }
+        return nil, media.MP10DecodeFetchFailure(reason, failure.RetryAfterSeconds)
+    }
+    // Some Android bridge versions encode denial in the payload while
+    // preserving transport-level reply.OK. Recognize ONLY explicit false.
+    if len(reply.Payload) > 0 && len(reply.Payload) <= 2048 {
+        var denial struct {
+            OK *bool `json:"ok"`
+            ErrorCode string `json:"error_code"`
+            RetryAfterSeconds int64 `json:"retry_after_seconds"`
+        }
+        if json.Unmarshal(reply.Payload, &denial) == nil && denial.OK != nil && !*denial.OK {
+            return nil, media.MP10DecodeFetchFailure(denial.ErrorCode, denial.RetryAfterSeconds)
+        }
+    }
 	decoded, e := decodeAndroidManifestFetch(reply.Payload)
 	if e != nil || len(decoded.Body) == 0 || len(decoded.Body) > 2<<20 {
 		return nil, errMP09Android
@@ -350,9 +379,11 @@ func (e *Engine) androidMediaLiveHandler(ctx context.Context, inv *Invocation, e
 		sidHash := sha256.Sum256([]byte(req.CaptureID))
 		sessionID := "live_" + hex.EncodeToString(sidHash[:12])
         startedAt := now
+        var recoverySession mp09StoredSession
         if recovering {
             meta, readErr := mp09ReadSession(ctx, inv, req.CaptureID, root, req, now)
             if readErr != nil {return failed("resume_requires_original_source_and_authorization")}
+            recoverySession = meta
             startedAt = time.UnixMilli(meta.StartedMS)
         }
         session, ee := media.NewLiveSession(sessionID, 1, startedAt, media.LiveSessionPolicy{
@@ -397,10 +428,23 @@ func (e *Engine) androidMediaLiveHandler(ctx context.Context, inv *Invocation, e
 			return failed("required_audio_missing")
 		}
         if recovering {
+            // MP10 P03: re-read the sealed session and entire capture-owned
+            // inventory BEFORE recovery, with fresh MP05 readback proofs.
+            // No token, URL, fragment path or digest may enter public errors.
+            priorRecoveryFence, fenceErr := mp10FenceInterruptedRecording(ctx, inv,
+                req.CaptureID, root, req, recoverySession, now, video, audio)
+            if fenceErr != nil { return failed("recovery_inventory_preflight_failed") }
             // Every inventoried fragment is independently rehashed and
             // reattached before any new poll or publication is permitted.
             if ee = mp09Rehydrate(session, now, video, audio, vpoll, apoll); ee != nil {
                 return failed("recovery_fragment_or_timeline_invalid")
+            }
+            // A second journal+disk barrier detects disappearance, role mixup
+            // or phase changes during hydration; never auto-delete evidence.
+            confirmedRecoveryFence, fenceErr := mp10FenceInterruptedRecording(ctx, inv,
+                req.CaptureID, root, req, recoverySession, now, video, audio)
+            if fenceErr != nil || !mp10SameRecoveryFence(priorRecoveryFence, confirmedRecoveryFence) {
+                return failed("recovery_inventory_changed_during_rehydrate")
             }
         } else if ee = mp09BeginSession(ctx, inv, req.CaptureID, root, req, now); ee != nil {
             return failed("durable_session_begin_failed")
@@ -417,6 +461,31 @@ func (e *Engine) androidMediaLiveHandler(ctx context.Context, inv *Invocation, e
 			// Invalid first attempts cannot leave a phantom active session.
 			delete(state.entries, req.CaptureID)
 		}
+	case "refresh_authorized":
+        // A private UI action must have confirmed a fresh capture handoff.
+        // Android's ManifestFetch broker independently verifies that its
+        // encrypted current capture URL matches this renewed root exactly;
+        // replacing a signed token in an Intent grants no new authority.
+        if active == nil || !req.RefreshApproved || req.RefreshGeneration == 0 ||
+            req.RefreshedRootURL == "" || req.RefreshedVideoURL == "" ||
+            (active.audio != nil && req.RefreshedAudioURL == "") {
+            return failed("refresh_authorization_or_binding_missing")
+        }
+        fresh := &mp09AndroidFetcher{inv: inv, capture: req.CaptureID, root: req.RefreshedRootURL}
+        active.video.use(inv)
+        candidates := []media.MP10RefreshCandidate{{Role:"video", ManifestURL:req.RefreshedVideoURL, HLS:fresh, DASH:fresh}}
+        if active.audio != nil {
+            active.audio.use(inv)
+            candidates = append(candidates, media.MP10RefreshCandidate{Role:"audio", ManifestURL:req.RefreshedAudioURL, HLS:fresh, DASH:fresh})
+        }
+        if authErr := active.ctrl.MP10Reauthorize(ctx,now,req.RefreshApproved,active.root,
+            req.RefreshedRootURL,req.RefreshGeneration,candidates...); authErr != nil {
+            // Incompatible source/timeline stays quarantined. No journal
+            // deletion, no changed generation, and no fake publication.
+            return failed("refresh_identity_or_durable_overlap_not_proven")
+        }
+        active.root = req.RefreshedRootURL
+        status,err = active.ctrl.PollDue(ctx,now)
 	case "poll":
 		if active == nil {
 			return failed("session_not_found_recover_authorization")
@@ -496,6 +565,7 @@ func (e *Engine) androidMediaLiveHandler(ctx context.Context, inv *Invocation, e
 		status, _ = active.ctrl.SnapshotForMP09()
 	}
 	stateName := string(status.State)
+    if status.RefreshRequired { stateName = "refresh_required" }
 	if stateName == "" {
 		snap, _ := active.session.Snapshot()
 		stateName = string(snap.State)
@@ -504,7 +574,7 @@ func (e *Engine) androidMediaLiveHandler(ctx context.Context, inv *Invocation, e
 		"capture_id": req.CaptureID, "status": stateName, "next_poll_after_ms": int64(status.NextPollAfter / time.Millisecond),
 		"durable_fragments": status.DurableFragments, "durable_bytes": status.DurableBytes,
 		"partial_review_required": status.PartialReviewRequired, "all_tracks_ended": status.AllTracksEnded,
-		"download_ready": false})
+        "refresh_required": status.RefreshRequired, "download_ready": false})
 }
 
 type mp09AndroidCleaner struct {

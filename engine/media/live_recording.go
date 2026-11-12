@@ -49,6 +49,7 @@ type MP09RecordingStatus struct {
 	DownloadReady         bool              `json:"download_ready"`
 	Published             bool              `json:"published"`
 	AllTracksEnded        bool              `json:"all_tracks_ended"`
+	RefreshRequired       bool              `json:"refresh_required"`
 }
 
 type mp09BoundTrack struct {
@@ -68,6 +69,7 @@ type MP09Recording struct {
 	stopped      bool
 	cancelled    bool
 	finalized    bool
+	refreshGeneration uint64 // MP10 P02: replay-resistant in-memory epoch, never durable credentials
 }
 
 // NewMP09Recording requires explicit role and rendition selection. One
@@ -110,6 +112,7 @@ func (r *MP09Recording) status(after time.Duration) (MP09RecordingStatus, error)
 	allEnded := len(r.tracks) > 0
 	for _, t := range r.tracks {
 		out.Tracks = append(out.Tracks, MP09TrackStatus{Role: t.role, Ended: t.ended, Partial: out.PartialReviewRequired})
+        out.RefreshRequired = out.RefreshRequired || t.poll.RefreshRequiredForMP10()
 		allEnded = allEnded && t.ended
 	}
 	out.AllTracksEnded = allEnded
@@ -174,15 +177,16 @@ func (r *MP09Recording) PollDue(ctx context.Context, now time.Time) (MP09Recordi
 		}
 		delay := got.NextPollAfter
 		if e != nil {
+            advertised := got.NextPollAfter
 			delay = 2 * time.Second
-			for i := 1; i < t.failures && i < 5; i++ {
-				delay *= 2
-			}
-			if delay > 30*time.Second {
-				delay = 30 * time.Second
-			}
+			for i := 1; i < t.failures && i < 5; i++ { delay *= 2 }
+			if delay > 30*time.Second { delay = 30 * time.Second }
+            if advertised > delay { delay = advertised }
 		}
-		delay = livePollInterval(delay)
+        // A real HTTP 429/503 Retry-After may exceed the ordinary 30s live
+        // poll cadence; this does not set any recording-lifetime timeout.
+        if delay > 5*time.Minute { delay = 5*time.Minute }
+        if delay <= 30*time.Second { delay = livePollInterval(delay) }
 		t.next = now.Add(delay)
 		if got.SourceEnded && e == nil {
 			t.ended = true

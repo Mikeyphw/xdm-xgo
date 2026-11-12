@@ -102,6 +102,29 @@ class AndroidLiveRecordingService : Service() {
                 update("Starting verified recording…", false)
                 poller = scope.launch { runRecording(payload) }
             }
+            REFRESH_AUTHORIZATION -> {
+                val id = captureId
+                if (id == null || intent.getStringExtra(CAPTURE) != id ||
+                    !intent.getBooleanExtra(USER_CONFIRMED_REFRESH, false)) {
+                    update("Explicit authorized refresh required", true)
+                    return START_NOT_STICKY
+                }
+                if (!lifecycle.beginAuthorizationRefresh()) {
+                    update("Reauthorization requires a recording in review", true)
+                    return START_NOT_STICKY
+                }
+                poller?.cancel()
+                poller = null
+                val body = JSONObject().put("action", "refresh_authorized")
+                    .put("capture_id", id)
+                    .put("refresh_approved", true)
+                    .put("refresh_generation", intent.getLongExtra(REFRESH_GENERATION, 0L))
+                    .put("refreshed_root_url", intent.getStringExtra(REFRESH_ROOT).orEmpty())
+                    .put("refreshed_video_url", intent.getStringExtra(REFRESH_VIDEO).orEmpty())
+                    .put("refreshed_audio_url", intent.getStringExtra(REFRESH_AUDIO).orEmpty())
+                update("Verifying refreshed source and preserved segments…", true)
+                scope.launch { runAuthorizedRefresh(id, body) }
+            }
             STOP_SAVE, PAUSE, RESUME, CANCEL_DISCARD -> {
                 val id = captureId
                 if (id == null) {
@@ -134,6 +157,24 @@ class AndroidLiveRecordingService : Service() {
             else -> update("Unknown recording action refused", true)
         }
         return START_NOT_STICKY
+    }
+
+    private suspend fun runAuthorizedRefresh(id: String, request: JSONObject) {
+        val result = try {
+            commandMutex.withLock { authority.submitMediaUiCommand("android.media.live", request) }
+        } catch (cancelled: kotlinx.coroutines.CancellationException) {
+            throw cancelled
+        } catch (_: Exception) { null }
+        val accepted = result?.ok == true && result.status == "capturing"
+        when (lifecycle.completeAuthorizationRefresh(accepted)) {
+            AndroidMP09RecordingLifecycleState.Phase.Recording -> {
+                update("Source identity verified — recording resumed", false)
+                if (poller == null) poller = scope.launch { pollLoop(id) }
+            }
+            AndroidMP09RecordingLifecycleState.Phase.Review ->
+                update("Refreshed source not verified — stored fragments retained for review", true)
+            else -> update("Reauthorization response is stale — review recording", true)
+        }
     }
 
     private suspend fun runControl(id: String, control: AndroidMP09RecordingLifecycleState.Control) {
@@ -197,6 +238,11 @@ class AndroidLiveRecordingService : Service() {
             return
         }
         if (!lifecycle.started()) return
+        if (result.status == "refresh_required") {
+            lifecycle.interrupted()
+            update("Media authorization expired — reopen the capture to refresh; saved parts retained", true)
+            return
+        }
         if (result.allTracksEnded || result.status == "stop_pending_verification") {
             lifecycle.interrupted()
             update("Source ended — choose Stop & Save", false)
@@ -222,12 +268,19 @@ class AndroidLiveRecordingService : Service() {
                 update("Recording interrupted — review fragments or retry Stop & Save", true)
                 return
             }
+            if (result.status == "refresh_required") {
+                lifecycle.interrupted()
+                update("Media authorization expired — reopen the capture to refresh; saved parts retained", true)
+                return
+            }
             if (result.status == "paused" || result.status == "stop_pending_verification" || result.allTracksEnded) {
                 lifecycle.interrupted()
                 update(if (result.status == "paused") "Recording paused outside this service — review" else "Stop & Save required", true)
                 return
             }
-            delay(result.nextPollAfterMs.coerceIn(500L, 30_000L))
+            // 429/503 Retry-After is bounded by Go to five minutes, distinct
+            // from any timeout on the overall recording lifetime.
+            delay(result.nextPollAfterMs.coerceIn(500L, 300_000L))
         }
     }
 
@@ -314,6 +367,12 @@ class AndroidLiveRecordingService : Service() {
         const val PAUSE = "com.mikeyphw.xdm.android.LIVE_PAUSE"
         const val RESUME = "com.mikeyphw.xdm.android.LIVE_RESUME"
         const val CANCEL_DISCARD = "com.mikeyphw.xdm.android.LIVE_CANCEL_DISCARD"
+        const val REFRESH_AUTHORIZATION = "com.mikeyphw.xdm.android.LIVE_REFRESH_AUTHORIZATION"
+        const val REFRESH_ROOT = "refresh_root_url"
+        const val REFRESH_VIDEO = "refresh_video_url"
+        const val REFRESH_AUDIO = "refresh_audio_url"
+        const val REFRESH_GENERATION = "refresh_generation"
+        const val USER_CONFIRMED_REFRESH = "user_confirmed_refresh"
         const val CAPTURE = "capture_id"
         const val PROTOCOL = "protocol"
         const val VIDEO = "video_url"
@@ -335,6 +394,15 @@ class AndroidLiveRecordingService : Service() {
         private val ID = Regex("^[A-Za-z0-9_-]{1,96}$")
 
         /** App-internal, user-initiated only: call after showing explicit selection. */
+        fun refreshAuthorized(context: Context, reviewed: Intent) {
+            require(reviewed.action == REFRESH_AUTHORIZATION)
+            require(reviewed.getBooleanExtra(USER_CONFIRMED_REFRESH, false))
+            // The caller must FIRST update MediaRequestHandoffStore through
+            // the existing encrypted, user-authorized capture handoff.
+            reviewed.setClass(context, AndroidLiveRecordingService::class.java)
+            context.startForegroundService(reviewed)
+        }
+
         fun start(context: Context, selection: Intent) {
             require(selection.action == START)
             selection.setClass(context, AndroidLiveRecordingService::class.java)
