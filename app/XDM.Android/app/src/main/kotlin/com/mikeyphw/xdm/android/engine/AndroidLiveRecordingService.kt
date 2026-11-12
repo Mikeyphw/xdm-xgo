@@ -393,6 +393,18 @@ class AndroidLiveRecordingService : Service() {
         private const val FAILURE_NOTIFICATION_ID = 49110
         private val ID = Regex("^[A-Za-z0-9_-]{1,96}$")
 
+        /** In-app controls use the SAME private service and lifecycle gate as notifications.
+         * Never report success before Go/MP08 returns a verified result. */
+        fun control(context: Context, captureId: String, actionName: String) {
+            require(ID.matches(captureId))
+            require(actionName in setOf(STOP_SAVE, PAUSE, RESUME, CANCEL_DISCARD))
+            val request = Intent(context, AndroidLiveRecordingService::class.java).apply {
+                action = actionName
+                putExtra(CAPTURE, captureId)
+            }
+            context.startService(request)
+        }
+
         /** App-internal, user-initiated only: call after showing explicit selection. */
         fun refreshAuthorized(context: Context, reviewed: Intent) {
             require(reviewed.action == REFRESH_AUTHORIZATION)

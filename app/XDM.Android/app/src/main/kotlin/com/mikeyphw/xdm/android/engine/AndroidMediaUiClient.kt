@@ -79,7 +79,7 @@ class AndroidMediaUiClient(private val context: Context) {
 
     /** Read-only recovery review or explicit orphan cleanup, never auto-resume. */
     suspend fun liveAction(captureId: String, action: String): AndroidMediaUiCommandResult {
-        require(action in setOf("inspect_recovery", "discard_recovery"))
+        require(action in setOf("inspect_recovery", "discard_recovery", "inspect_active"))
         val requestId = "media-${UUID.randomUUID()}"
         return submit("android.media.live", requestId, "live", org.json.JSONObject()
             .put("client_request_id", requestId).put("capture_id", captureId)

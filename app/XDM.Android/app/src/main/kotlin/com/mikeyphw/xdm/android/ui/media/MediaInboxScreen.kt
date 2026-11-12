@@ -8,6 +8,8 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
@@ -37,6 +39,8 @@ import com.mikeyphw.xdm.android.engine.AndroidMediaUiClient
 import com.mikeyphw.xdm.android.engine.AndroidMediaUiCommandResult
 import com.mikeyphw.xdm.android.engine.AndroidLiveRecordingService
 import com.mikeyphw.xdm.android.engine.AndroidLiveSelectionGate
+import com.mikeyphw.xdm.android.engine.MP11LiveUiPolicy
+import com.mikeyphw.xdm.android.scheduler.MediaRequestHandoffStore
 import com.mikeyphw.xdm.android.engine.ManifestSelectionV1Contract
 import com.mikeyphw.xdm.android.media.MediaBatchInputParser
 import com.mikeyphw.xdm.android.media.MediaBatchUrlDisposition
@@ -93,6 +97,22 @@ fun MediaInboxScreen(
     var recoveryFragments by remember { mutableStateOf(0) }
     var userSelectedResumeCaptureId by remember { mutableStateOf<String?>(null) }
     var recoveryReviewState by remember { mutableStateOf("recovery_review_required") }
+    var liveLimitMinutes by remember { mutableStateOf(0) }
+    var liveLimitMiB by remember { mutableStateOf(0) }
+    var activeControlId by remember { mutableStateOf<String?>(null) }
+    var activeInspection by remember { mutableStateOf<AndroidMediaUiCommandResult?>(null) }
+    var confirmDiscardId by remember { mutableStateOf<String?>(null) }
+    // Sensitive source URLs must never be saveable, logged, or displayed in status receipts.
+    var refreshCaptureId by remember { mutableStateOf<String?>(null) }
+    var refreshRootUrl by remember { mutableStateOf("") }
+    var refreshVideoUrl by remember { mutableStateOf("") }
+    var refreshAudioUrl by remember { mutableStateOf("") }
+    val clearRefresh: () -> Unit = {
+        refreshCaptureId = null
+        refreshRootUrl = ""
+        refreshVideoUrl = ""
+        refreshAudioUrl = ""
+    }
     val onInspectGoManifest: (MediaCaptureRecord) -> Unit = { capture ->
         if (inspectingManifest == null) {
             inspectingManifest = capture.id
@@ -142,6 +162,8 @@ fun MediaInboxScreen(
                     putExtra(AndroidLiveRecordingService.EXPECTED_REVISION, revision)
                     putExtra(AndroidLiveRecordingService.RECOVER_INTERRUPTED,
                         userSelectedResumeCaptureId == id)
+                    putExtra(AndroidLiveRecordingService.USER_LIMIT_MS, liveLimitMinutes.toLong() * 60_000L)
+                    putExtra(AndroidLiveRecordingService.USER_LIMIT_BYTES, liveLimitMiB.toLong() * 1_048_576L)
                 }
                 AndroidLiveRecordingService.start(context, intent)
                 manifestReview = null
@@ -180,6 +202,22 @@ fun MediaInboxScreen(
                 }
             } catch (_: Exception) { liveFeedback = "Recovery review unavailable; no files were changed." }
             finally { inspectingManifest = null }
+        }
+    }
+    // Read-only process-local status; Go is authoritative even if UI state is stale.
+    val onInspectActive: (MediaCaptureRecord) -> Unit = inspectActive@{ capture ->
+        if (inspectingManifest != null) return@inspectActive
+        inspectingManifest = capture.id
+        inspectScope.launch {
+            try {
+                val result = goManifestClient.liveAction(capture.id, "inspect_active")
+                if (result.ok && result.status != "not_active") {
+                    activeControlId = capture.id
+                    activeInspection = result
+                } else liveFeedback = "No active recording. Review interrupted fragments before starting again."
+            } catch (_: Exception) {
+                liveFeedback = "Recording status unavailable. No operation was submitted."
+            } finally { inspectingManifest = null }
         }
     }
     var batchText by rememberSaveable { mutableStateOf("") }
@@ -361,6 +399,7 @@ fun MediaInboxScreen(
                                 onResolve = onResolve,
                                 onInspectManifest = onInspectGoManifest,
                                 onReviewInterrupted = onReviewInterrupted,
+                                onRecordingControls = onInspectActive,
                                 onSelectVariant = onSelectVariant,
                                 onTrackSelectionChanged = onTrackSelectionChanged,
                                 onRemove = onRemove,
@@ -387,6 +426,7 @@ fun MediaInboxScreen(
                             onResolve = onResolve,
                             onInspectManifest = onInspectGoManifest,
                             onReviewInterrupted = onReviewInterrupted,
+                                onRecordingControls = onInspectActive,
                             onSelectVariant = onSelectVariant,
                             onTrackSelectionChanged = onTrackSelectionChanged,
                             onRemove = onRemove,
@@ -442,6 +482,126 @@ fun MediaInboxScreen(
             },
             onClose = { manifestReview = null },
             onStartLive = onStartLive,
+            liveLimitMinutes = liveLimitMinutes,
+            liveLimitMiB = liveLimitMiB,
+            onLimitMinutes = { liveLimitMinutes = it },
+            onLimitMiB = { liveLimitMiB = it },
+        )
+    }
+    activeControlId?.let { id ->
+        val inspected = activeInspection
+        val state = inspected?.status.orEmpty()
+        val allowed = MP11LiveUiPolicy.actions(state, inspected?.liveDvrCapable == true)
+        AlertDialog(
+            onDismissRequest = { activeControlId = null; activeInspection = null },
+            title = { Text("Live recording controls") },
+            text = {
+                Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Session: ${state.replace('_', ' ')}")
+                    Text("Verified staged fragments: ${inspected?.liveDurableFragments ?: 0}. This is not a completed file.")
+                    if (inspected?.livePartialReviewRequired == true)
+                        Text("Partial capture detected. Stop & Save requires independent verification.")
+                    if ("stop_save" in allowed) Button(onClick = {
+                        activeControlId = null
+                        val sent = runCatching { AndroidLiveRecordingService.control(context, id, AndroidLiveRecordingService.STOP_SAVE) }.isSuccess
+                        liveFeedback = if (sent) "Stop & Save requested. The file is not complete until MP08 verifies publication."
+                            else "Stop & Save could not be submitted. Recording state is unchanged."
+                    }) { Text("Stop & Save") }
+                    if ("pause" in allowed) TextButton(onClick = {
+                        activeControlId = null
+                        val sent = runCatching { AndroidLiveRecordingService.control(context, id, AndroidLiveRecordingService.PAUSE) }.isSuccess
+                        liveFeedback = if (sent) "DVR pause requested; check the foreground notification for the result."
+                            else "Pause could not be submitted. Recording state is unchanged."
+                    }) { Text("Pause (DVR)") }
+                    if ("resume" in allowed) TextButton(onClick = {
+                        activeControlId = null
+                        val sent = runCatching { AndroidLiveRecordingService.control(context, id, AndroidLiveRecordingService.RESUME) }.isSuccess
+                        liveFeedback = if (sent) "Resume requested; the Go session still controls authorization."
+                            else "Resume could not be submitted. Recording state is unchanged."
+                    }) { Text("Resume") }
+                    if ("refresh" in allowed) Button(onClick = {
+                        activeControlId = null
+                        refreshCaptureId = id
+                    }) { Text("Reauthorize source") }
+                    if ("discard" in allowed) TextButton(onClick = {
+                        activeControlId = null
+                        confirmDiscardId = id
+                    }) { Text("Discard captured fragments…") }
+                    if (allowed.isEmpty()) Text("No controls available. Inspect interrupted recording for recovery.")
+                }
+            },
+            confirmButton = { TextButton(onClick = { activeControlId = null; activeInspection = null }) { Text("Close") } },
+        )
+    }
+    confirmDiscardId?.let { id ->
+        AlertDialog(onDismissRequest = { confirmDiscardId = null },
+            title = { Text("Discard live recording?") },
+            text = { Text("This explicitly requests verified deletion of this capture's staged fragments. It cannot be undone. Publication is never implied.") },
+            confirmButton = { Button(onClick = {
+                confirmDiscardId = null
+                val accepted = runCatching {
+                    AndroidLiveRecordingService.control(context, id, AndroidLiveRecordingService.CANCEL_DISCARD)
+                }.isSuccess
+                liveFeedback = if (accepted) "Discard requested. Only Go/storage confirmation can mark cleanup complete."
+                    else "Discard command could not be submitted; fragments were not marked removed."
+            }) { Text("Request discard") } },
+            dismissButton = { TextButton(onClick = { confirmDiscardId = null }) { Text("Keep fragments") } },
+        )
+    }
+    refreshCaptureId?.let { id ->
+        AlertDialog(
+            onDismissRequest = clearRefresh,
+            title = { Text("Reauthorize live source") },
+            text = {
+                Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("Paste newly authorized URLs for this same recording. Go must verify every stored fragment and timeline before resuming. URLs stay only in this temporary form and the encrypted request store.")
+                    OutlinedTextField(value = refreshRootUrl, onValueChange = { refreshRootUrl = it },
+                        label = { Text("Refreshed root manifest URL") }, singleLine = true)
+                    OutlinedTextField(value = refreshVideoUrl, onValueChange = { refreshVideoUrl = it },
+                        label = { Text("Selected video playlist / MPD URL") }, singleLine = true)
+                    OutlinedTextField(value = refreshAudioUrl, onValueChange = { refreshAudioUrl = it },
+                        label = { Text("Selected audio playlist / MPD URL") }, singleLine = true)
+                    Text("Requires an active interrupted session. Sources needing new cookie/header authorization must first be re-captured in Live locator. A rejected refresh never deletes recorded bytes.")
+                }
+            },
+            confirmButton = {
+                Button(enabled = MP11LiveUiPolicy.validRefresh(refreshRootUrl, refreshVideoUrl, refreshAudioUrl),
+                    onClick = {
+                        val root = refreshRootUrl.trim()
+                        val video = refreshVideoUrl.trim()
+                        val audio = refreshAudioUrl.trim()
+                        clearRefresh()
+                        val generation = System.currentTimeMillis()
+                        val accepted = runCatching {
+                            MediaRequestHandoffStore.rememberCapture(
+                                captureId = id, headers = emptyMap(),
+                                redactedSummary = "MP11 user-approved live source refresh",
+                                isExpiringUrl = true, exactUrl = root,
+                                expiresAtEpochMs = generation + 600_000L,
+                                subjectGeneration = generation,
+                            )
+                        }.getOrDefault(false)
+                        if (!accepted) {
+                            liveFeedback = "Encrypted authorization update was refused. No refresh was submitted."
+                        } else {
+                            val request = Intent(context, AndroidLiveRecordingService::class.java).apply {
+                                action = AndroidLiveRecordingService.REFRESH_AUTHORIZATION
+                                putExtra(AndroidLiveRecordingService.CAPTURE, id)
+                                putExtra(AndroidLiveRecordingService.USER_CONFIRMED_REFRESH, true)
+                                putExtra(AndroidLiveRecordingService.REFRESH_ROOT, root)
+                                putExtra(AndroidLiveRecordingService.REFRESH_VIDEO, video)
+                                putExtra(AndroidLiveRecordingService.REFRESH_AUDIO, audio)
+                                putExtra(AndroidLiveRecordingService.REFRESH_GENERATION, generation)
+                            }
+                            val sent = runCatching { AndroidLiveRecordingService.refreshAuthorized(context, request) }.isSuccess
+                            liveFeedback = if (sent) "Refresh requested. Go must prove source identity, every stored fragment and stream overlap before recording resumes."
+                                else "Refresh could not be sent. Stored fragments remain available for review."
+                        }
+                    }) { Text("Verify & reauthorize") }
+            },
+            dismissButton = { TextButton(onClick = clearRefresh) { Text("Cancel") } },
         )
     }
     liveFeedback?.let { message ->
@@ -503,6 +663,10 @@ private fun Mp03ManifestReviewDialog(
     onVerify: () -> Unit,
     onClose: () -> Unit,
     onStartLive: () -> Unit,
+    liveLimitMinutes: Int,
+    liveLimitMiB: Int,
+    onLimitMinutes: (Int) -> Unit,
+    onLimitMiB: (Int) -> Unit,
 ) {
     val graph = result.manifestGraph
     val plan = result.manifestSelectionPlan
@@ -576,6 +740,28 @@ private fun Mp03ManifestReviewDialog(
                                     label = { Text(c.uppercase()) })
                             }
                         }
+                    }
+                    if (selection.intent == "live_recording") {
+                        item { Text("Optional user recording limits (0 = no user limit)") }
+                        item {
+                            XdmActionFlowRow {
+                                listOf(0, 15, 30, 60).forEach { minutes ->
+                                    FilterChip(selected = liveLimitMinutes == minutes,
+                                        onClick = { onLimitMinutes(minutes) },
+                                        label = { Text(if (minutes == 0) "No time limit" else "$minutes min") })
+                                }
+                            }
+                        }
+                        item {
+                            XdmActionFlowRow {
+                                listOf(0, 128, 256, 512).forEach { mib ->
+                                    FilterChip(selected = liveLimitMiB == mib,
+                                        onClick = { onLimitMiB(mib) },
+                                        label = { Text(if (mib == 0) "No size limit" else "$mib MiB") })
+                                }
+                            }
+                        }
+                        item { Text("Android foreground-service limits still apply. Completion requires MP08 verification.") }
                     }
                     if (plan == null) {
                         item { Text("Not verified yet. Re-check exact IDs and signed manifest revision with Go.") }

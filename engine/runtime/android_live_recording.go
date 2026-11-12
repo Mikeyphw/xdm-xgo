@@ -50,6 +50,7 @@ type mp09LiveCommand struct {
 
 type mp09AndroidRecording struct {
 	root      string
+	dvrCapable bool // process-only user-selected DVR authority; never persisted or inferred
 	ctrl      *media.MP09Recording
 	session   *media.LiveSession
 	video     *mp09AndroidStore
@@ -272,6 +273,24 @@ func (e *Engine) androidMediaLiveHandler(ctx context.Context, inv *Invocation, e
 	var status media.MP09RecordingStatus
 	var err error
 	switch req.Action {
+    case "inspect_active":
+        // UI-only, read-only snapshot. Never expose URLs, fragments, paths,
+        // credential references, or a false DownloadReady/Published claim.
+        if active == nil {
+            return emitAndroidMediaResult(inv, req.ClientRequestID, "live", true,
+                map[string]any{"capture_id":req.CaptureID,"status":"not_active",
+                    "download_ready":false,"published":false})
+        }
+        live, readErr := active.ctrl.SnapshotForMP09()
+        if readErr != nil { return failed("active_status_unavailable") }
+        label := string(live.State)
+        if live.RefreshRequired { label = "refresh_required" }
+        return emitAndroidMediaResult(inv, req.ClientRequestID, "live", true,
+            map[string]any{"capture_id":req.CaptureID,"status":label,
+                "durable_fragments":live.DurableFragments,"durable_bytes":live.DurableBytes,
+                "partial_review_required":live.PartialReviewRequired,
+                "all_tracks_ended":live.AllTracksEnded,"dvr_capable":active.dvrCapable,
+                "download_ready":false,"published":false})
     case "bind_dash":
         // The original MP03 option IDs are hashes, NOT DASH representation IDs.
         // Re-fetch using Android's paired scope before translating them.
@@ -453,7 +472,7 @@ func (e *Engine) androidMediaLiveHandler(ctx context.Context, inv *Invocation, e
 		if ee != nil {
 			return failed("track_binding_refused")
 		}
-		active = &mp09AndroidRecording{root: root, ctrl: controller, session: session, video: video,
+		active = &mp09AndroidRecording{root: root, dvrCapable: req.DVRCapable, ctrl: controller, session: session, video: video,
 			audio: audio, videoPoll: vpoll, audioPoll: apoll}
 		state.entries[req.CaptureID] = active
 		status, err = active.ctrl.PollDue(ctx, now)

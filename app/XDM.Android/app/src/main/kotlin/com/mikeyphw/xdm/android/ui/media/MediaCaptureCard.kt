@@ -57,6 +57,7 @@ internal fun MediaCaptureCard(
     onResolve: (MediaCaptureRecord) -> Unit,
     onInspectManifest: (MediaCaptureRecord) -> Unit,
     onReviewInterrupted: (MediaCaptureRecord) -> Unit,
+    onRecordingControls: (MediaCaptureRecord) -> Unit,
     onSelectVariant: (MediaCaptureRecord, String) -> Unit,
     onTrackSelectionChanged: (MediaCaptureRecord, MediaTrackSelection) -> Unit,
     onRemove: (MediaCaptureRecord) -> Unit,
@@ -235,6 +236,7 @@ internal fun MediaCaptureCard(
                     Text("Inspect Go manifest")
                 }
                 TextButton(onClick = { onReviewInterrupted(capture) }) { Text("Review interrupted recording") }
+                TextButton(onClick = { onRecordingControls(capture) }) { Text("Recording controls") }
             }
             TextButton(onClick = { removeConfirmVisible = true }) { Text("Remove") }
         }
