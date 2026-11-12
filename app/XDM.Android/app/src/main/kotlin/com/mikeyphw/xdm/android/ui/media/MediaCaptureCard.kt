@@ -232,7 +232,7 @@ internal fun MediaCaptureCard(
             // Read-only Go graph discovery; doesn't bypass or replace Kotlin HLS.
             if (capture.isPlaylist) {
                 TextButton(onClick = { onInspectManifest(capture) }) {
-                    Text(if (capture.manifestIsLive == true) "Inspect / record live" else "Inspect Go manifest")
+                    Text("Inspect Go manifest")
                 }
                 TextButton(onClick = { onReviewInterrupted(capture) }) { Text("Review interrupted recording") }
             }
