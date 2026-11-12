@@ -137,6 +137,7 @@ func (r *MP09Recording) PollDue(ctx context.Context, now time.Time) (MP09Recordi
 	}
 	smallest := 30 * time.Second
 	var firstErr error
+	freshSuccessfulPoll := false
 	for _, t := range r.tracks {
 		if t.ended {
 			continue
@@ -169,6 +170,7 @@ func (r *MP09Recording) PollDue(ctx context.Context, now time.Time) (MP09Recordi
 			}
 		} else {
 			t.failures = 0
+			freshSuccessfulPoll = true
 		}
 		delay := got.NextPollAfter
 		if e != nil {
@@ -187,6 +189,43 @@ func (r *MP09Recording) PollDue(ctx context.Context, now time.Time) (MP09Recordi
 		}
 		if delay < smallest {
 			smallest = delay
+		}
+	}
+	// A successful poll can contain only already-committed fragments. In
+	// that case ObserveCommitted is correctly idempotent and cannot, by
+	// itself, move a recoverable session back to capturing. Restore only
+	// after at least one real fresh transport observation AND every active
+	// track's most recent poll succeeded. No completion is implied.
+	if firstErr == nil && freshSuccessfulPoll {
+		allHealthy := true
+		for _, t := range r.tracks {
+			if !t.ended && t.failures != 0 {
+				allHealthy = false
+				break
+			}
+		}
+		if allHealthy {
+			snapshot, e := r.session.Snapshot()
+			if e != nil {
+				return MP09RecordingStatus{}, e
+			}
+			if snapshot.State == LiveSessionRecoverable {
+				if e := r.session.Resume(now); e != nil {
+					return MP09RecordingStatus{}, e
+				}
+			}
+		}
+	} else if firstErr != nil {
+		// A later successful video/audio track must not erase an earlier
+		// failure of another track with newly committed fragments.
+		snapshot, e := r.session.Snapshot()
+		if e != nil {
+			return MP09RecordingStatus{}, e
+		}
+		if snapshot.State == LiveSessionCapturing {
+			if e := r.session.NetworkFailure(now); e != nil {
+				return MP09RecordingStatus{}, e
+			}
 		}
 	}
 	if smallest < 100*time.Millisecond {
