@@ -91,6 +91,8 @@ fun MediaInboxScreen(
     var liveFeedback by remember { mutableStateOf<String?>(null) }
     var recoveryCaptureId by remember { mutableStateOf<String?>(null) }
     var recoveryFragments by remember { mutableStateOf(0) }
+    var userSelectedResumeCaptureId by remember { mutableStateOf<String?>(null) }
+    var recoveryReviewState by remember { mutableStateOf("recovery_review_required") }
     val onInspectGoManifest: (MediaCaptureRecord) -> Unit = { capture ->
         if (inspectingManifest == null) {
             inspectingManifest = capture.id
@@ -116,7 +118,14 @@ fun MediaInboxScreen(
         inspectScope.launch {
             try {
                 val fresh = goManifestClient.resolveManifest(id, requested, revision)
-                val selection = AndroidLiveSelectionGate.fromFreshManifest(id, revision, requested, fresh)
+                val selectedPlan = requireNotNull(fresh.manifestSelectionPlan)
+                // MP03 option IDs are synthetic: only Go may map them to raw
+                // MPD Representation IDs with a fresh, origin-checked fetch.
+                val dashBound = if (fresh.manifestGraph?.protocol == "dash") {
+                    goManifestClient.liveBindDash(id, revision,
+                        requireNotNull(selectedPlan.videoId), requireNotNull(selectedPlan.audioId))
+                } else null
+                val selection = AndroidLiveSelectionGate.fromFreshManifest(id, revision, requested, fresh, dashBound)
                 val destination = "live_" + java.util.UUID.randomUUID().toString().replace("-", "")
                 val intent = Intent(context, AndroidLiveRecordingService::class.java).apply {
                     action = AndroidLiveRecordingService.START
@@ -128,12 +137,20 @@ fun MediaInboxScreen(
                     putExtra(AndroidLiveRecordingService.VIDEO_REP, selection.videoRepresentationId)
                     putExtra(AndroidLiveRecordingService.AUDIO_REP, selection.audioRepresentationId)
                     putExtra(AndroidLiveRecordingService.REQUIRE_AUDIO, selection.requireAudio)
+                    putExtra(AndroidLiveRecordingService.VIDEO_OPTION, selectedPlan.videoId.orEmpty())
+                    putExtra(AndroidLiveRecordingService.AUDIO_OPTION, selectedPlan.audioId.orEmpty())
+                    putExtra(AndroidLiveRecordingService.EXPECTED_REVISION, revision)
+                    putExtra(AndroidLiveRecordingService.RECOVER_INTERRUPTED,
+                        userSelectedResumeCaptureId == id)
                 }
                 AndroidLiveRecordingService.start(context, intent)
                 manifestReview = null
-                liveFeedback = "Live recording requested. Controls are in the foreground notification."
+                liveFeedback = if (userSelectedResumeCaptureId == id)
+                    "Verified recovery requested. Source and every stored fragment must match; no automatic completion."
+                else "Live recording requested. Controls are in the foreground notification."
+                userSelectedResumeCaptureId = null
             } catch (_: Exception) {
-                liveFeedback = "Live recording not started. Recheck an unprotected live HLS playlist with separate audio and MP4 selection. DASH and embedded-audio mapping are not yet UI-qualified."
+                liveFeedback = "Recording not started. Refresh the authorized live HLS/DASH manifest, verify separate audio and MP4, and review any interrupted fragments."
             } finally { inspectingManifest = null }
         }
     }
@@ -143,12 +160,23 @@ fun MediaInboxScreen(
         inspectScope.launch {
             try {
                 val result = goManifestClient.liveAction(capture.id, "inspect_recovery")
-                if (!result.ok) liveFeedback = "Interrupted recording review unavailable. Capture may need renewed authorization."
+                if (!result.ok) {
+                    // An unreadable fragment cannot be verified or resumed, but
+                    // a separately confirmed, capture-scoped discard may still
+                    // be allowed by the durable store's publication guard.
+                    recoveryCaptureId = capture.id
+                    recoveryFragments = 0
+                    recoveryReviewState = "inventory_unavailable_review"
+                }
                 else if (result.status == "recording_active") liveFeedback = "This capture is currently recording; use its notification controls."
-                else if (result.recoveryFragments == 0) liveFeedback = "No interrupted recording fragments found for this capture."
+                else if (result.status == "published_cleanup_verified")
+                    liveFeedback = "This recording was already published and its temporary fragment cleanup is verified."
+                else if (result.recoveryFragments == 0 && result.status !in setOf("publication_pending_review", "published_cleanup_pending", "empty_session_review_required"))
+                    liveFeedback = "No interrupted recording fragments found for this capture."
                 else {
                     recoveryCaptureId = capture.id
                     recoveryFragments = result.recoveryFragments
+                    recoveryReviewState = result.status.orEmpty()
                 }
             } catch (_: Exception) { liveFeedback = "Recovery review unavailable; no files were changed." }
             finally { inspectingManifest = null }
@@ -424,17 +452,38 @@ fun MediaInboxScreen(
     recoveryCaptureId?.let { id ->
         AlertDialog(onDismissRequest = { recoveryCaptureId = null },
             title = { Text("Review interrupted recording") },
-            text = { Text("$recoveryFragments verified stored fragments remain. This is not a completed video. Discard permanently deletes these fragments; recording is not resumed automatically.") },
-            confirmButton = { TextButton(onClick = {
-                recoveryCaptureId = null
+            text = { Text(when (recoveryReviewState) {
+                "publication_pending_review" -> "Publication was interrupted. $recoveryFragments stored fragments remain; playback status must be reviewed before any new recording. Resuming is blocked."
+                "published_cleanup_pending" -> "Recording was published before interruption. $recoveryFragments transient fragments may remain for explicit cleanup; resuming is blocked."
+                "empty_session_review_required" -> "This interrupted session has no committed media. You can explicitly discard its session journal or keep it for review."
+                "inventory_unavailable_review" -> "The local fragment inventory is unreadable or damaged. The recording cannot be resumed or considered saved. You may explicitly request capture-scoped removal; suspicious files or ambiguous publication will still be refused."
+                "journal_missing_review_required" -> "Stored fragments lack a verified session journal. $recoveryFragments fragments require review or explicit discard; resuming is blocked."
+                else -> "$recoveryFragments stored fragments remain. A fresh authorized source and complete readback are required before resuming."
+            }) },
+            confirmButton = {
+                if (recoveryReviewState != "publication_pending_review") TextButton(onClick = {
+                    recoveryCaptureId = null
                 inspectScope.launch {
                     val result = runCatching { goManifestClient.liveAction(id, "discard_recovery") }.getOrNull()
                     liveFeedback = if (result?.ok == true && result.status == "discarded_verified")
                         "Interrupted fragments were removed and verified." else
                         "Cleanup was not confirmed; stored fragments were not marked removed."
                 }
-            }) { Text("Discard fragments") } },
-            dismissButton = { TextButton(onClick = { recoveryCaptureId = null }) { Text("Keep") } })
+                }) { Text("Discard fragments") }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (recoveryReviewState == "recovery_review_required" && recoveryFragments > 0) TextButton(onClick = {
+                        recoveryCaptureId = null
+                        val capture = capturesById[id]
+                        if (capture != null) {
+                            userSelectedResumeCaptureId = id
+                            onInspectGoManifest(capture)
+                        } else liveFeedback = "Original capture not found; refresh the authorized source."
+                    }) { Text("Reauthorize & resume") }
+                    TextButton(onClick = { recoveryCaptureId = null }) { Text("Keep") }
+                }
+            })
     }
     if (inspectingManifest != null) {
         AlertDialog(

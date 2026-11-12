@@ -22,24 +22,197 @@ internal class AndroidLiveDurableFragmentStore(context: Context) {
     private val root = File(context.applicationContext.filesDir, "xgo-fragments-mp09").apply { mkdirs() }
     private val parts = File(root, "parts").apply { mkdirs() }
     private val journal = File(root, "journal-v1.json")
+    private val sessionJournal = File(root, "session-v1.json")
     // Crash recovery must run before accepting any new fragment receipt.
     // Failure is sticky for this process: do not silently discard a bad journal.
-    private val startupHealthy: Boolean = runCatching { reconcile().optBoolean("ok", false) }.getOrDefault(false)
+    private var startupHealthy: Boolean = runCatching { reconcile().optBoolean("ok", false) }.getOrDefault(false)
 
     @Synchronized
     fun execute(payload: JSONObject): JSONObject = runCatching {
         if (!payload.optBoolean("mp09_live", false)) return@runCatching refused("mp09_store_scope_denied")
-        if (!startupHealthy) return@runCatching refused("fragment_recovery_unavailable")
+        val action = payload.optString("action")
+        // A damaged but parseable per-capture receipt must never strand an
+        // explicit user-discard. All other operations stay fail-closed until
+        // reconciliation has verified the store again.
+        if (!startupHealthy && action !in setOf("discard_capture", "reconcile"))
+            return@runCatching refused("fragment_recovery_unavailable")
         when (payload.optString("action")) {
             "write" -> write(payload)
             "verify" -> verify(payload)
-            "reconcile" -> reconcile()
+            "reconcile" -> reconcile().also { if (it.optBoolean("ok", false)) startupHealthy = true }
             "read_chunk" -> readChunk(payload)
-            "discard_capture" -> discardCapture(payload)
+            "discard_capture" -> discardCapture(payload).also {
+                // Recover in-process only after a successful, scoped cleanup.
+                if (it.optBoolean("ok", false))
+                    startupHealthy = runCatching { reconcile().optBoolean("ok", false) }.getOrDefault(false)
+            }
             "inventory" -> inventory(payload)
+            "session_begin" -> beginSession(payload)
+            "session_read" -> readSession(payload)
+            "session_finish" -> finishSession(payload)
+            "session_status" -> sessionStatus(payload)
+            "session_phase" -> changeSessionPhase(payload)
             else -> refused("unsupported_fragment_action")
         }
     }.getOrElse { refused("fragment_store_io_error") }
+
+    // This journal contains only bounded non-secret session metadata. Raw URLs,
+    // headers, cookies and signed query strings are never persisted here.
+    private fun sessionJournalRows(): JSONObject {
+        if (!sessionJournal.exists()) return JSONObject()
+        if (sessionJournal.length() > 512L * 1024L ||
+            java.nio.file.Files.isSymbolicLink(sessionJournal.toPath())) error("mp09_session_journal_unsafe")
+        val rows = JSONObject(sessionJournal.readText(Charsets.UTF_8))
+        if (rows.length() > 128) error("mp09_session_journal_count")
+        val keys = rows.keys()
+        while (keys.hasNext()) {
+            val key = keys.next()
+            val row = rows.optJSONObject(key) ?: error("mp09_session_journal_row")
+            if (row.optString("capture_hash") != key || !validateSession(row))
+                error("mp09_session_journal_integrity")
+        }
+        return rows
+    }
+
+    private fun writeSessionRows(rows: JSONObject) {
+        if (rows.length() > 128) error("mp09_session_count_exceeded")
+        val bytes = rows.toString().toByteArray(Charsets.UTF_8)
+        if (bytes.size > 512 * 1024) error("mp09_session_size_exceeded")
+        atomicFile(sessionJournal, bytes)
+    }
+
+    private fun sessionSeal(row: JSONObject): String = AndroidMP09SessionJournalGuard.checksum(listOf(
+        row.optInt("schema_version", -1).toString(), row.optString("capture_hash"),
+        row.optString("binding_sha256"), row.optLong("started_at_epoch_ms", -1L).toString(),
+        row.optLong("generation", -1L).toString(), row.optString("phase"), row.optString("protocol"),
+        row.optBoolean("require_audio", false).toString(), row.optBoolean("dvr_capable", false).toString(),
+        row.optLong("user_limit_ms", -1L).toString(), row.optLong("user_limit_bytes", -1L).toString()))
+
+    private fun sessionCaptureKey(capture: String): String {
+        require(capture.matches(Regex("^[A-Za-z0-9_-]{1,96}$")))
+        return hash(capture.toByteArray(Charsets.UTF_8))
+    }
+
+    private fun validateSession(row: JSONObject): Boolean {
+        val fingerprint = row.optString("binding_sha256")
+        val protocol = row.optString("protocol")
+        val started = row.optLong("started_at_epoch_ms", 0L)
+        val names = mutableSetOf<String>()
+        val keys = row.keys()
+        while (keys.hasNext()) names += keys.next()
+        return AndroidMP09SessionJournalGuard.exactFields(names) &&
+            row.optInt("schema_version", -1) == AndroidMP09SessionJournalGuard.SCHEMA &&
+            row.optString("capture_hash").matches(Regex("sha256:[0-9a-f]{64}")) &&
+            fingerprint.matches(Regex("sha256:[0-9a-f]{64}")) &&
+            row.optLong("generation", 0L) == 1L &&
+            protocol in setOf("hls", "dash") &&
+            started in 1_600_000_000_000L..4_100_000_000_000L &&
+            row.optLong("user_limit_ms", -1L) in 0L..31_536_000_000L &&
+            row.optLong("user_limit_bytes", -1L) in 0L..1_099_511_627_776L &&
+            row.optString("session_seal").matches(Regex("sha256:[0-9a-f]{64}")) &&
+            row.optString("session_seal") == sessionSeal(row) &&
+            // Raw DASH representation IDs can themselves carry opaque
+            // private identifiers. Only the SHA-256 source binding is durable.
+            !row.has("video_representation_id") && !row.has("audio_representation_id") &&
+            row.optString("phase") in setOf("recording", "publishing", "published", "published_clean")
+    }
+
+    private fun beginSession(request: JSONObject): JSONObject {
+        val capture = request.optString("capture_id")
+        val key = runCatching { sessionCaptureKey(capture) }.getOrNull() ?: return refused("session_capture_invalid")
+        val handoff = MediaRequestHandoffStore.forCapture(capture) ?: return refused("capture_session_missing")
+        if (handoff.expiresAtEpochMs <= System.currentTimeMillis()) return refused("capture_session_expired")
+        val item = JSONObject()
+            .put("schema_version", AndroidMP09SessionJournalGuard.SCHEMA)
+            .put("capture_hash", key)
+            .put("binding_sha256", request.optString("binding_sha256"))
+            .put("started_at_epoch_ms", request.optLong("started_at_epoch_ms"))
+            .put("generation", request.optLong("generation"))
+            .put("phase", "recording")
+            .put("protocol", request.optString("protocol"))
+            .put("require_audio", request.optBoolean("require_audio", true))
+            .put("dvr_capable", request.optBoolean("dvr_capable", false))
+            .put("user_limit_ms", request.optLong("user_limit_ms", 0L))
+            .put("user_limit_bytes", request.optLong("user_limit_bytes", 0L))
+        item.put("session_seal", sessionSeal(item))
+        if (!validateSession(item) || !item.optBoolean("require_audio")) return refused("session_metadata_invalid")
+        if (kotlin.math.abs(System.currentTimeMillis() - item.getLong("started_at_epoch_ms")) > 60_000L)
+            return refused("session_start_clock_invalid")
+        val journalData = sessionJournalRows()
+        val previous = journalData.optJSONObject(key)
+        if (previous != null) {
+            // Re-recording is a NEW user-confirmed capture, not recovery or
+            // an implicit retry. Never reset publishing/published/recording.
+            val prefix = "$key:"
+            val fragments = readJournal()
+            val hasReceipts = fragments.keys().asSequence().any { it.startsWith(prefix) }
+            val owner = key.removePrefix("sha256:")
+            val emptyParts = parts.listFiles()?.none { it.name.startsWith("$owner-fragment_") } == true
+            val freshDestination = request.optString("destination_key")
+                .matches(Regex("^[A-Za-z0-9_-]{1,96}$"))
+            if (!AndroidMP09SessionPhaseGate.mayStartAfterTerminal(previous.optString("phase"),
+                    request.optBoolean("fresh_user_start", false), !hasReceipts && emptyParts, freshDestination))
+                return refused("session_already_exists_review_required")
+        }
+        journalData.put(key, item)
+        writeSessionRows(journalData)
+        return JSONObject().put("ok", true).put("status", "session_created")
+    }
+
+    private fun readSession(request: JSONObject): JSONObject {
+        val capture = request.optString("capture_id")
+        val key = runCatching { sessionCaptureKey(capture) }.getOrNull() ?: return refused("session_capture_invalid")
+        val handoff = MediaRequestHandoffStore.forCapture(capture) ?: return refused("capture_session_missing")
+        if (handoff.expiresAtEpochMs <= System.currentTimeMillis()) return refused("capture_session_expired")
+        val row = sessionJournalRows().optJSONObject(key) ?: return refused("session_not_found")
+        if (row.optString("capture_hash") != key || !validateSession(row)) return refused("session_journal_invalid")
+        if (!AndroidMP09SessionPhaseGate.mayResume(row.optString("phase")))
+            return refused("session_publication_review_required")
+        return JSONObject(row.toString()).put("ok", true).put("status", "recoverable_unverified")
+    }
+
+    private fun sessionStatus(request: JSONObject): JSONObject {
+        val key = runCatching { sessionCaptureKey(request.optString("capture_id")) }.getOrNull()
+            ?: return refused("session_capture_invalid")
+        val row = sessionJournalRows().optJSONObject(key)
+            ?: return JSONObject().put("ok", true).put("phase", "missing")
+        if (row.optString("capture_hash") != key || !validateSession(row))
+            return refused("session_journal_invalid")
+        return JSONObject().put("ok", true).put("phase", row.optString("phase"))
+    }
+
+    private fun changeSessionPhase(request: JSONObject): JSONObject {
+        val key = runCatching { sessionCaptureKey(request.optString("capture_id")) }.getOrNull()
+            ?: return refused("session_capture_invalid")
+        val rows = sessionJournalRows()
+        val row = rows.optJSONObject(key) ?: return refused("session_not_found")
+        val next = request.optString("phase")
+        // 'published_clean' requires post-deletion verification and is never
+        // granted through a generic phase command, even on an intact journal.
+        if (next == "published_clean") return refused("terminal_phase_requires_verified_cleanup")
+        if (row.optString("capture_hash") != key || !validateSession(row) ||
+            !AndroidMP09SessionPhaseGate.mayTransition(row.optString("phase"), next))
+            return refused("session_phase_transition_denied")
+        row.put("phase", next)
+        row.put("session_seal", sessionSeal(row))
+        rows.put(key, row)
+        writeSessionRows(rows)
+        return JSONObject().put("ok", true).put("phase", next)
+    }
+
+    private fun finishSession(request: JSONObject): JSONObject {
+        val key = runCatching { sessionCaptureKey(request.optString("capture_id")) }.getOrNull()
+            ?: return refused("session_capture_invalid")
+        val rows = sessionJournalRows()
+        val row = rows.optJSONObject(key)
+            ?: return JSONObject().put("ok", true).put("status", "session_already_finished")
+        if (!validateSession(row)) return refused("session_journal_invalid")
+        // Never erase a publication fence here. Durable retirement of a
+        // recording happens only inside discardCapture, after verified deletion.
+        if (row.optString("phase") == "recording") return refused("session_finish_requires_verified_discard")
+        return JSONObject().put("ok", true).put("status", "publication_fence_retained")
+            .put("phase", row.optString("phase"))
+    }
 
     private fun write(request: JSONObject): JSONObject {
         val capture = request.optString("capture_id")
@@ -155,44 +328,64 @@ internal class AndroidLiveDurableFragmentStore(context: Context) {
                 return refused("inventory_unverified")
             rows.put(rec)
         }
+        // A journal-first cancellation tombstone can leave orphaned parts
+        // after a crash. They cannot be mixed into a new recording.
+        val owner = hash(capture.toByteArray(Charsets.UTF_8)).removePrefix("sha256:")
+        val bound = (0 until rows.length()).map { rows.getJSONObject(it).optString("artifact_ref") }.toSet()
+        val unbound = parts.listFiles()?.count { file ->
+            file.name.startsWith("$owner-fragment_") && "parts/${file.name}" !in bound
+        } ?: return refused("inventory_directory_unavailable")
         return JSONObject().put("ok", true).put("records", rows)
+            .put("unbound_fragments", unbound)
     }
 
     private fun discardCapture(request: JSONObject): JSONObject {
         val capture = request.optString("capture_id")
-        if (capture.isBlank() || capture.length > 256) return refused("capture_required")
-        val prefix = hash(capture.toByteArray(Charsets.UTF_8)) + ":"
-        val rows = readJournal()
-        val names = mutableListOf<String>()
-        val keys = mutableListOf<String>()
-        val scan = rows.keys()
-        while (scan.hasNext()) {
-            val key = scan.next()
-            if (!key.startsWith(prefix)) continue
-            val rec = rows.optJSONObject(key) ?: return refused("cleanup_corrupt")
-            if (!checkReceipt(rec)) return refused("cleanup_unverified")
-            names += rec.optString("artifact_ref")
-            keys += key
-        }
-        if (!canonicalChild(parts)) return refused("cleanup_unsafe")
-        for (name in names) {
-            val target = File(root,name)
-            if (java.nio.file.Files.isSymbolicLink(target.toPath()) ||
-                target.canonicalFile.parentFile != parts.canonicalFile) return refused("cleanup_unsafe")
-        }
-        // Journal-first tombstone; after a crash, reconcile removes orphans.
+        if (!capture.matches(Regex("^[A-Za-z0-9_-]{1,96}$"))) return refused("capture_required")
+        val sessionKey = hash(capture.toByteArray(Charsets.UTF_8))
+        val rows = readJournal() // A globally malformed journal requires manual review; never rewrite it.
+        if (java.nio.file.Files.isSymbolicLink(journal.toPath()) ||
+            !root.isDirectory || !parts.isDirectory || !canonicalChild(root) || !canonicalChild(parts))
+            return refused("cleanup_unsafe_directory_or_journal")
+        val sessions = sessionJournalRows() // Validate every publication fence before deletion.
+        val priorSession = sessions.optJSONObject(sessionKey)
+        if (sessions.has(sessionKey) && (priorSession == null || !validateSession(priorSession)))
+            return refused("session_journal_invalid")
+        val phase = priorSession?.optString("phase") ?: "missing"
+        if (!AndroidMP09SessionPhaseGate.mayDiscard(phase))
+            return refused("publication_review_required")
+
+        // Never use a journal-provided artifact_ref for deletion. A corrupted
+        // receipt might point at ANOTHER recording inside the same private dir.
+        // Scan real filenames and select only files owned by this capture hash.
+        val keys = try {
+            AndroidMP09CleanupPlan.ownedJournalKeys(sessionKey, rows.keys().asSequence().toList())
+        } catch (_: IllegalArgumentException) { return refused("cleanup_journal_keys_invalid") }
+        try {
+            AndroidMP09CleanupPlan.ownedFiles(parts, sessionKey)
+        } catch (_: Exception) { return refused("cleanup_unsafe_owned_path") }
+
+        // Journal-first retirement: if killed after this atomic update and
+        // before unlink/fsync, the next explicit cleanup re-discovers the
+        // owner-scoped orphan files from the directory, not from receipts.
         keys.forEach { rows.remove(it) }
         atomicFile(journal, rows.toString().toByteArray(Charsets.UTF_8))
-        for (name in names) {
-            val target = File(root,name)
-            if (target.exists() && !target.delete()) return refused("cleanup_failed")
+        try {
+            AndroidMP09CleanupPlan.deleteOwnedFiles(parts, sessionKey) { syncDirectory(parts) }
+        } catch (_: Exception) { return refused("cleanup_failed_retry_explicitly") }
+
+        // The session journal is updated ONLY after the filesystem deletion
+        // is verified. Published sessions retain a published_clean tombstone.
+        val terminal = AndroidMP09SessionPhaseGate.afterVerifiedDiscard(phase)
+        if (phase == "recording" && terminal == "missing") sessions.remove(sessionKey)
+        if (phase == "published" && terminal == "published_clean") {
+            priorSession!!.put("phase", "published_clean")
+            priorSession.put("session_seal", sessionSeal(priorSession))
+            sessions.put(sessionKey, priorSession)
         }
-        syncDirectory(parts)
-        val owner = hash(capture.toByteArray(Charsets.UTF_8)).removePrefix("sha256:")
-        val remaining = parts.listFiles()?.count { it.name.startsWith("$owner-fragment_") }
-            ?: return refused("cleanup_unavailable")
-        if (remaining != 0) return refused("cleanup_incomplete")
-        return JSONObject().put("ok",true).put("status","discarded_verified").put("remaining",0)
+        if (phase == "recording" || phase == "published") writeSessionRows(sessions)
+        return JSONObject().put("ok", true).put("status", "discarded_verified")
+            .put("remaining", 0).put("cleanup_scope", "capture_owned_only")
     }
 
     private fun reconcile(): JSONObject {
@@ -204,15 +397,20 @@ internal class AndroidLiveDurableFragmentStore(context: Context) {
             val key = keys.next()
             val receipt = entries.optJSONObject(key) ?: continue
             if (checkReceipt(receipt)) live += receipt.optString("artifact_ref").removePrefix("parts/")
-            else { entries.remove(key); corrupt++ }
+            else corrupt++
         }
-        atomicFile(journal, entries.toString().toByteArray(Charsets.UTF_8))
-        parts.listFiles()?.forEach { file ->
-            if (!file.isFile || !file.name.endsWith(".part")) return refused("unsafe_fragment_directory")
-            if (file.name !in live && !file.delete()) return refused("fragment_cleanup_failed")
-        }
-        syncDirectory(parts)
-        return JSONObject().put("ok", true).put("status", "reconciled").put("corrupt", corrupt)
+        // Missing/hash-mismatched entries are never silently erased.
+        if (corrupt != 0) return refused("fragment_recovery_unverified")
+        val files = parts.listFiles() ?: return refused("fragment_directory_unavailable")
+        if (files.any { file ->
+                !file.isFile || java.nio.file.Files.isSymbolicLink(file.toPath()) ||
+                file.canonicalFile.parentFile != parts.canonicalFile ||
+                !file.name.matches(Regex("[0-9a-f]{64}-fragment_[0-9a-f]{64}-g[0-9]+\\.part"))
+            }) return refused("unsafe_fragment_directory")
+        // Orphans are preserved for explicit user review/discard. No implicit
+        // cleanup, and no recovered recording may incorporate them as proof.
+        return JSONObject().put("ok", true).put("status", "reconciled")
+            .put("corrupt", 0).put("unbound_fragments", files.count { it.name !in live })
     }
 
     private fun checkReceipt(item: JSONObject): Boolean {

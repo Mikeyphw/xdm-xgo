@@ -38,6 +38,11 @@ data class AndroidMediaUiCommandResult(
     val nextPollAfterMs: Long = 3_000L,
     val allTracksEnded: Boolean = false,
     val recoveryFragments: Int = 0,
+    val cleanupPending: Boolean = false,
+    /** Transient only. Never write a signed MPD URL into saved UI state. */
+    val liveManifestUrl: String? = null,
+    val videoRepresentationId: String? = null,
+    val audioRepresentationId: String? = null,
 )
 
 internal object AndroidMediaUiWire {
@@ -149,6 +154,10 @@ internal object AndroidMediaUiWire {
         manifestRevision = payload.optString("manifest_revision").takeIf { Regex("[0-9a-f]{64}").matches(it) },
         manifestSelectionPlan = payload.optJSONObject("manifest_selection_plan")?.let(ManifestSelectionV1Contract::decode),
         recoveryFragments = payload.optInt("recovery_fragments", 0).coerceIn(0, 4096),
+        cleanupPending = payload.optBoolean("cleanup_pending", false),
+        liveManifestUrl = payload.nullableString("manifest_url"),
+        videoRepresentationId = payload.nullableString("video_representation_id"),
+        audioRepresentationId = payload.nullableString("audio_representation_id"),
     )
 
     fun captureJson(record: MediaCaptureRecord): JSONObject = JSONObject()
