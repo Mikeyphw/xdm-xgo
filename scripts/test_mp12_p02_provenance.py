@@ -5,6 +5,7 @@ import copy
 import hashlib
 import io
 import json
+import subprocess
 from pathlib import Path
 import struct
 import tempfile
@@ -234,6 +235,52 @@ class CrossArch(unittest.TestCase):
    with self.assertRaises(OSError):
     m.write_report(o,{'release_eligible':False})
   self.assertFalse(o.exists())
+ def local_checkout(self):
+  repo=self.root/'real-checkout';repo.mkdir()
+  subprocess.run(['git','init','-q',str(repo)],check=True,
+                 capture_output=True,text=True)
+  (repo/'fixture.txt').write_text('first commit\n')
+  subprocess.run(['git','-C',str(repo),'add','--','fixture.txt'],check=True,
+                 capture_output=True,text=True)
+  subprocess.run(['git','-C',str(repo),'-c','user.name=MP12 Test',
+                  '-c','user.email=mp12@example.invalid','commit','-qm',
+                  'Fixture one'],check=True,capture_output=True,text=True)
+  actual=subprocess.check_output(['git','-C',str(repo),'rev-parse','HEAD'],
+                                  text=True).strip()
+  return repo,actual
+
+ def test_real_checkout_sha_agrees_with_expected_head(self):
+  repo,actual=self.local_checkout()
+  self.assertEqual(m.checkout_head_guard(repo,actual),actual)
+
+ def test_real_checkout_stale_expected_sha_refuses(self):
+  repo,actual=self.local_checkout()
+  with self.assertRaisesRegex(m.Refused,'CHECKOUT_HEAD_MISMATCH'):
+   m.checkout_head_guard(repo,HEAD if actual!=HEAD else 'b'*40)
+
+ def test_real_checkout_new_commit_invalidates_old_receipt(self):
+  repo,previous=self.local_checkout()
+  (repo/'fixture.txt').write_text('new commit\n')
+  subprocess.run(['git','-C',str(repo),'add','--','fixture.txt'],check=True,
+                 capture_output=True,text=True)
+  subprocess.run(['git','-C',str(repo),'-c','user.name=MP12 Test',
+                  '-c','user.email=mp12@example.invalid','commit','-qm',
+                  'Fixture two'],check=True,capture_output=True,text=True)
+  with self.assertRaisesRegex(m.Refused,'CHECKOUT_HEAD_MISMATCH'):
+   m.checkout_head_guard(repo,previous)
+
+ def test_real_checkout_refuses_non_repo_and_nested_root(self):
+  repo,actual=self.local_checkout()
+  inner=repo/'sub';inner.mkdir()
+  with self.assertRaisesRegex(m.Refused,'CHECKOUT_TOPLEVEL_MISMATCH'):
+   m.checkout_head_guard(inner,actual)
+  with self.assertRaisesRegex(m.Refused,'CHECKOUT_GIT_FAILED'):
+   m.checkout_head_guard(self.pair,actual)
+
+ def test_real_checkout_refuses_invalid_head_before_git(self):
+  with self.assertRaisesRegex(m.Refused,'EXPECTED_SHA_INVALID'):
+   m.checkout_head_guard(self.root,'short')
+
  def test_report_writer_rejects_large_receipt_without_writing(self):
   o=self.root/'receipt.json'
   with self.assertRaisesRegex(m.Refused,'REPORT_TOO_LARGE'):

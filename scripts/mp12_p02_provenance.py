@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 import re
 import struct
+import subprocess
 import sys
 import tempfile
 import zipfile
@@ -278,8 +279,28 @@ def audit_x86_native_bundle(bundle,head,key,inputs):
          'binaries_checked':binaries,'test_only':True,'release_eligible':False,
          'x86_api36_runtime_qualified':False,'physical_arm64_runtime_qualified':False}
 
-def evidence(root,head,armdir,x86bundle):
+def checkout_head_guard(root,head):
+ # Report receipts are attacker-editable files. The claimed source SHA must
+ # also be the actual Git checkout, not merely a value echoed by two inputs.
  require(bool(SHA40.fullmatch(head)),'EXPECTED_SHA_INVALID')
+ require(root.is_dir() and not root.is_symlink(),'CHECKOUT_ROOT_INVALID')
+ def git(*args):
+  try:
+   result=subprocess.run(['git','-C',str(root),*args],capture_output=True,
+                         text=True,timeout=15,check=False)
+  except (OSError,subprocess.TimeoutExpired):
+   raise Refused('MP12_P02_REFUSED_CHECKOUT_GIT_UNAVAILABLE') from None
+  require(result.returncode==0 and 0<len(result.stdout)<4096,
+          'CHECKOUT_GIT_FAILED')
+  return result.stdout.strip()
+ top=git('rev-parse','--show-toplevel')
+ require(Path(top).resolve()==root.resolve(),'CHECKOUT_TOPLEVEL_MISMATCH')
+ actual=git('rev-parse','--verify','HEAD')
+ require(bool(SHA40.fullmatch(actual)) and actual==head,'CHECKOUT_HEAD_MISMATCH')
+ return actual
+
+def evidence(root,head,armdir,x86bundle):
+ checkout_head_guard(root,head)
  guard=audit_source(root)
  src={name:read_checked(root/name,3_000_000) for name in X86_SOURCE_FILES}
  key,inputs=fingerprint(src)
