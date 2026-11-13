@@ -135,5 +135,36 @@ class GateTests(unittest.TestCase):
                                   timeout=120, check=False)
             self.assertEqual(proc.returncode, 0, proc.stdout[-4000:])
 
+    def test_mp12_p05_desktop_firefox_parity_source_and_recorded_fixtures(self):
+        # Read-only Native Messaging v2 -> Go v1 snapshot source/fixture audit.
+        # Real Go runtime replay is independently executed by classified Go CI.
+        import subprocess
+        source = Path(__file__).with_name('mp12_p05_desktop_parity.py')
+        tests = Path(__file__).with_name('test_mp12_p05_desktop_parity.py')
+        self.assertTrue(source.is_file() and tests.is_file())
+        for command in ((sys.executable, '-B', str(tests)),
+                        (sys.executable, '-B', str(source), 'source-only',
+                         '--repo', str(Path(__file__).resolve().parents[1]))):
+            result = subprocess.run(command, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, timeout=120, check=False)
+            self.assertEqual(result.returncode, 0, result.stdout[-4000:])
+        # The Linux x86_64 hosted source job has setup-go and CGO enabled.
+        # Android/arm64 Termux cannot run Go -race; on GitHub it MUST run.
+        import os
+        if os.environ.get('GITHUB_ACTIONS') == 'true':
+            go_env = subprocess.run(['go', 'env', 'GOOS', 'GOARCH', 'CGO_ENABLED'],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                timeout=45, check=False)
+            self.assertEqual(go_env.returncode, 0, go_env.stdout[-1200:])
+            self.assertEqual(go_env.stdout.split(), ['linux', 'amd64', '1'],
+                'P05 hosted race acceptance must execute on CGO-enabled Linux/amd64')
+            race = subprocess.run(['go', 'test', '-race', '-count=1',
+                                   './runtime/desktopparity'],
+                cwd=str(Path(__file__).resolve().parents[1]/'engine'),
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                timeout=360, check=False)
+            self.assertEqual(race.returncode, 0,
+                'P05 HOSTED GO RACE CHECK REQUIRED: '+race.stdout[-4000:])
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
