@@ -91,5 +91,21 @@ class GateTests(unittest.TestCase):
             p=root/'.github/workflows/xgo-mp08b3-acceptance.yml';p.write_text(pieces['.github/workflows/xgo-mp08b3-acceptance.yml'].replace('default: false','default: true'))
             with self.assertRaises(module.Refused):module.source_guard(root)
 
+    def test_mp12_p02_native_provenance_source_and_negative_matrix(self):
+        # MP12 P01's already-registered source lane executes P02 without
+        # altering the immutably pinned historical CI05 workflow again.
+        import subprocess
+        p02 = Path(__file__).with_name('test_mp12_p02_provenance.py')
+        guard = Path(__file__).with_name('mp12_p02_provenance.py')
+        self.assertTrue(p02.is_file())
+        self.assertTrue(guard.is_file())
+        for command in ((sys.executable, '-B', str(p02)),
+                        (sys.executable, '-B', str(guard), 'source-only',
+                         '--repo', str(Path(__file__).resolve().parents[1]))):
+            proc = subprocess.run(command, stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT, text=True,
+                                  timeout=90, check=False)
+            self.assertEqual(proc.returncode, 0, proc.stdout[-2000:])
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
