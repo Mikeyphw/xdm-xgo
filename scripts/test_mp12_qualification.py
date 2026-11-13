@@ -107,5 +107,16 @@ class GateTests(unittest.TestCase):
                                   timeout=90, check=False)
             self.assertEqual(proc.returncode, 0, proc.stdout[-2000:])
 
+    def test_mp12_p03_durable_legacy_canary_contracts(self):
+        # Source- and fixture-level canary tests run in the pre-existing MP12 P01
+        # targeted lane, without weakening any historical exact CI05 workflow.
+        import subprocess
+        script = Path(__file__).with_name('test_mp12_p03_canary_contract.py')
+        self.assertTrue(script.is_file())
+        p = subprocess.run([sys.executable, '-B', str(script)],
+                           stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                           text=True, timeout=90, check=False)
+        self.assertEqual(p.returncode, 0, p.stdout[-2400:])
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
