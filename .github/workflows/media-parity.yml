@@ -92,3 +92,104 @@ jobs:
           path: ${{ runner.temp }}/mp00-kotlin-suites.json
           retention-days: 14
           if-no-files-found: warn
+
+  mp11-p04-api36-registered:
+    name: MP11 P04 API36 Compose UI Acceptance (explicit dispatch only)
+    # Workaround for new P04 workflow not being registered on main. The user
+    # must explicitly dispatch this already-registered workflow on the PR ref.
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      github.ref == 'refs/heads/feature/xgo-mp09-consolidated-recording-20261111'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    permissions:
+      contents: read
+      pull-requests: read
+    concurrency:
+      group: xgo-mp11-p04-registered-${{ github.ref }}
+      cancel-in-progress: false
+    steps:
+      - name: Checkout dispatched exact branch SHA
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify PR28 origin, current HEAD, explicit dispatch and architecture
+        shell: bash
+        env:
+          EXPECTED_SHA: ${{ github.sha }}
+          EXPECTED_REF: ${{ github.ref }}
+          REPOSITORY: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: '28'
+          EVENT: ${{ github.event_name }}
+        run: |
+          set -euo pipefail
+          test "$EVENT" = workflow_dispatch
+          test "$REPOSITORY" = Mikeyphw/xdm-xgo
+          test "$EXPECTED_REF" = refs/heads/feature/xgo-mp09-consolidated-recording-20261111
+          [[ "$EXPECTED_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          test "$(uname -m)" = x86_64
+          pr_head="$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '.head.sha')"
+          pr_branch="$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '.head.ref')"
+          pr_repo="$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq '.head.repo.full_name')"
+          test "$pr_head" = "$EXPECTED_SHA"
+          test "$pr_branch" = feature/xgo-mp09-consolidated-recording-20261111
+          test "$pr_repo" = "$REPOSITORY"
+          echo MP11_P04_SHA_HEAD_PASS
+      - name: Verify hardware KVM (refuse fallback)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -c /dev/kvm
+          if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
+            sudo chown "$(id -u):$(id -g)" /dev/kvm
+            sudo chmod 0600 /dev/kvm
+          fi
+          python3 - <<'PY_KVM'
+          import os
+          fd = os.open('/dev/kvm', os.O_RDWR | os.O_CLOEXEC)
+          os.close(fd)
+          print('MP11_P04_KVM_OPEN_PASS')
+          PY_KVM
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Fail-closed JUnit parser negative cases
+        run: python3 -B scripts/test_mp11_p04_instrumentation.py --self-test
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Provision and verify API36 emulator runtime
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'platform-tools' 'emulator' 'system-images;android-36;google_apis;x86_64'
+          bash app/XDM.Android/tools/provision-hosted-emulator-runtime.sh --prepare
+          bash app/XDM.Android/tools/provision-hosted-emulator-runtime.sh --verify "$ANDROID_SDK_ROOT"
+      - name: Real API36 Compose UI interaction tests (all five, not compile-only)
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        env:
+          MP11_P04_EXPECTED_SHA: ${{ github.sha }}
+          MP11_P04_OPTED_IN: 'true'
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          force-avd-creation: true
+          disable-animations: true
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          script: python3 -B scripts/test_mp11_p04_instrumentation.py --api36-execute
+      - name: Retain fresh instrumented JUnit receipt for debugging
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mp11-p04-api36-compose-junit
+          path: app/XDM.Android/app/build/outputs/androidTest-results/connected/**/*.xml
+          if-no-files-found: warn
+          retention-days: 14
