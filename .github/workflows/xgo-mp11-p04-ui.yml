@@ -1,0 +1,97 @@
+# MP11 P04: explicit opt-in real Compose UI instrumentation, NOT release qualification.
+name: XGO MP11 P04 API36 Compose UI Acceptance
+on:
+  workflow_dispatch:
+    inputs:
+      exact_head_sha:
+        description: Exact 40-hex branch HEAD to run (never arbitrary SHA)
+        required: true
+        type: string
+      run_api36:
+        description: Explicit API36 x86_64 emulator opt-in (default OFF)
+        required: true
+        type: boolean
+        default: false
+  pull_request:
+    types: [labeled]
+permissions:
+  contents: read
+concurrency:
+  group: xgo-mp11-p04-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+jobs:
+  api36-compose-ui:
+    name: MP11 P04 exact-commit real Compose interactions (opt-in only)
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.run_api36 == true) ||
+      (github.event_name == 'pull_request' && github.event.action == 'labeled' &&
+       github.event.label.name == 'xgo-mp11-p04-api36' &&
+       github.event.pull_request.head.repo.full_name == github.repository)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 70
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09
+        with:
+          ref: ${{ github.event.pull_request.head.sha || inputs.exact_head_sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Exact SHA and same-repo provenance gate
+        shell: bash
+        env:
+          EXPECTED: ${{ github.event.pull_request.head.sha || inputs.exact_head_sha }}
+          BRANCH_SHA: ${{ github.sha }}
+          MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
+          OPTED_IN: ${{ (github.event_name == 'workflow_dispatch' && inputs.run_api36 == true) || (github.event_name == 'pull_request' && github.event.action == 'labeled' && github.event.label.name == 'xgo-mp11-p04-api36' && github.event.pull_request.head.repo.full_name == github.repository) }}
+        run: |
+          set -euo pipefail
+          test "$OPTED_IN" = true
+          [[ "$EXPECTED" =~ ^[0-9a-f]{40}$ ]]
+          test "$(git rev-parse HEAD)" = "$EXPECTED"
+          if [[ "$MANUAL" == true ]]; then test "$BRANCH_SHA" = "$EXPECTED"; fi
+          test "$(uname -m)" = x86_64
+      - name: KVM availability (no software emulation fallback)
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -c /dev/kvm
+          if [[ ! -r /dev/kvm || ! -w /dev/kvm ]]; then
+            sudo chown "$(id -u):$(id -g)" /dev/kvm
+            sudo chmod 0600 /dev/kvm
+          fi
+          python3 - <<'PY_KVM'
+          import os
+          f = os.open('/dev/kvm', os.O_RDWR | os.O_CLOEXEC)
+          os.close(f)
+          print('MP11_P04_KVM_OPEN_PASS')
+          PY_KVM
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: Fail-closed JUnit parser negative tests
+        run: python3 -B scripts/test_mp11_p04_instrumentation.py --self-test
+      - uses: actions/setup-java@v6
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
+      - uses: gradle/actions/setup-gradle@v6
+      - name: Prepare API36 emulator and host binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'platform-tools' 'emulator' 'system-images;android-36;google_apis;x86_64'
+          bash app/XDM.Android/tools/provision-hosted-emulator-runtime.sh --prepare
+          bash app/XDM.Android/tools/provision-hosted-emulator-runtime.sh --verify "$ANDROID_SDK_ROOT"
+      - name: Real API36 Compose UI interaction tests (exact five cases)
+        uses: ReactiveCircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d
+        env:
+          MP11_P04_EXPECTED_SHA: ${{ github.event.pull_request.head.sha || inputs.exact_head_sha }}
+          MP11_P04_OPTED_IN: 'true'
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          force-avd-creation: true
+          disable-animations: true
+          emulator-options: -no-snapshot -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim
+          script: python3 -B scripts/test_mp11_p04_instrumentation.py --api36-execute

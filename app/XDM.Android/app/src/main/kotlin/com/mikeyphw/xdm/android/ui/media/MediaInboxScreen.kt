@@ -40,6 +40,7 @@ import com.mikeyphw.xdm.android.engine.AndroidMediaUiCommandResult
 import com.mikeyphw.xdm.android.engine.AndroidLiveRecordingService
 import com.mikeyphw.xdm.android.engine.AndroidLiveSelectionGate
 import com.mikeyphw.xdm.android.engine.MP11LiveUiPolicy
+import com.mikeyphw.xdm.android.engine.MP11P04Diagnostics
 import com.mikeyphw.xdm.android.scheduler.MediaRequestHandoffStore
 import com.mikeyphw.xdm.android.engine.ManifestSelectionV1Contract
 import com.mikeyphw.xdm.android.media.MediaBatchInputParser
@@ -216,7 +217,9 @@ fun MediaInboxScreen(
                     activeInspection = result
                 } else liveFeedback = "No active recording. Review interrupted fragments before starting again."
             } catch (_: Exception) {
-                liveFeedback = "Recording status unavailable. No operation was submitted."
+                liveFeedback = "Recording status unavailable. No operation was submitted. (" +
+                    MP11P04Diagnostics.code(MP11P04Diagnostics.Area.Recording,
+                        MP11P04Diagnostics.Outcome.Unavailable) + ")"
             } finally { inspectingManifest = null }
         }
     }
@@ -491,117 +494,113 @@ fun MediaInboxScreen(
     activeControlId?.let { id ->
         val inspected = activeInspection
         val state = inspected?.status.orEmpty()
-        val allowed = MP11LiveUiPolicy.actions(state, inspected?.liveDvrCapable == true)
         AlertDialog(
             onDismissRequest = { activeControlId = null; activeInspection = null },
             title = { Text("Live recording controls") },
             text = {
-                Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Session: ${state.replace('_', ' ')}")
-                    Text("Verified staged fragments: ${inspected?.liveDurableFragments ?: 0}. This is not a completed file.")
-                    if (inspected?.livePartialReviewRequired == true)
-                        Text("Partial capture detected. Stop & Save requires independent verification.")
-                    if ("stop_save" in allowed) Button(onClick = {
-                        activeControlId = null
-                        val sent = runCatching { AndroidLiveRecordingService.control(context, id, AndroidLiveRecordingService.STOP_SAVE) }.isSuccess
-                        liveFeedback = if (sent) "Stop & Save requested. The file is not complete until MP08 verifies publication."
-                            else "Stop & Save could not be submitted. Recording state is unchanged."
-                    }) { Text("Stop & Save") }
-                    if ("pause" in allowed) TextButton(onClick = {
-                        activeControlId = null
-                        val sent = runCatching { AndroidLiveRecordingService.control(context, id, AndroidLiveRecordingService.PAUSE) }.isSuccess
-                        liveFeedback = if (sent) "DVR pause requested; check the foreground notification for the result."
-                            else "Pause could not be submitted. Recording state is unchanged."
-                    }) { Text("Pause (DVR)") }
-                    if ("resume" in allowed) TextButton(onClick = {
-                        activeControlId = null
-                        val sent = runCatching { AndroidLiveRecordingService.control(context, id, AndroidLiveRecordingService.RESUME) }.isSuccess
-                        liveFeedback = if (sent) "Resume requested; the Go session still controls authorization."
-                            else "Resume could not be submitted. Recording state is unchanged."
-                    }) { Text("Resume") }
-                    if ("refresh" in allowed) Button(onClick = {
-                        activeControlId = null
-                        refreshCaptureId = id
-                    }) { Text("Reauthorize source") }
-                    if ("discard" in allowed) TextButton(onClick = {
-                        activeControlId = null
-                        confirmDiscardId = id
-                    }) { Text("Discard captured fragments…") }
-                    if (allowed.isEmpty()) Text("No controls available. Inspect interrupted recording for recovery.")
-                }
+                MP11P04RecordingControls(
+                    state = state, durableFragments = inspected?.liveDurableFragments ?: 0,
+                    partialReview = inspected?.livePartialReviewRequired == true,
+                    dvrCapable = inspected?.liveDvrCapable == true,
+                    onAction = { action ->
+                        when (action) {
+                            "stop_save", "pause", "resume" -> {
+                                activeControlId = null
+                                val sent = runCatching {
+                                    when (action) {
+                                        "stop_save" -> AndroidLiveRecordingService.control(context, id, AndroidLiveRecordingService.STOP_SAVE)
+                                        "pause" -> AndroidLiveRecordingService.control(context, id, AndroidLiveRecordingService.PAUSE)
+                                        else -> AndroidLiveRecordingService.control(context, id, AndroidLiveRecordingService.RESUME)
+                                    }
+                                }.isSuccess
+                                liveFeedback = if (sent) when (action) {
+                                    "stop_save" -> "Stop & Save requested. Completion requires independent MP08 verification."
+                                    "pause" -> "DVR pause requested. Check the foreground notification."
+                                    else -> "Resume requested. Go still verifies authorization."
+                                } else "Recording control was not submitted. State is unchanged. (" +
+                                    MP11P04Diagnostics.code(MP11P04Diagnostics.Area.Recording,
+                                        MP11P04Diagnostics.Outcome.Unavailable) + ")"
+                            }
+                            "refresh" -> {
+                                activeControlId = null
+                                refreshCaptureId = id
+                            }
+                            "discard" -> {
+                                activeControlId = null
+                                confirmDiscardId = id
+                            }
+                            else -> liveFeedback = "Unsupported recording control was refused."
+                        }
+                    },
+                )
             },
             confirmButton = { TextButton(onClick = { activeControlId = null; activeInspection = null }) { Text("Close") } },
         )
     }
     confirmDiscardId?.let { id ->
-        AlertDialog(onDismissRequest = { confirmDiscardId = null },
-            title = { Text("Discard live recording?") },
-            text = { Text("This explicitly requests verified deletion of this capture's staged fragments. It cannot be undone. Publication is never implied.") },
-            confirmButton = { Button(onClick = {
+        MP11P04DiscardDialog(
+            onConfirm = {
                 confirmDiscardId = null
-                val accepted = runCatching {
+                val submitted = runCatching {
                     AndroidLiveRecordingService.control(context, id, AndroidLiveRecordingService.CANCEL_DISCARD)
                 }.isSuccess
-                liveFeedback = if (accepted) "Discard requested. Only Go/storage confirmation can mark cleanup complete."
-                    else "Discard command could not be submitted; fragments were not marked removed."
-            }) { Text("Request discard") } },
-            dismissButton = { TextButton(onClick = { confirmDiscardId = null }) { Text("Keep fragments") } },
+                liveFeedback = if (submitted) "Discard requested. Only Go/storage confirmation can mark cleanup complete."
+                    else "Discard not submitted; fragments were not marked removed. (" +
+                        MP11P04Diagnostics.code(MP11P04Diagnostics.Area.Recording,
+                            MP11P04Diagnostics.Outcome.Unavailable) + ")"
+            },
+            onKeep = { confirmDiscardId = null },
         )
     }
     refreshCaptureId?.let { id ->
-        AlertDialog(
-            onDismissRequest = clearRefresh,
-            title = { Text("Reauthorize live source") },
-            text = {
-                Column(Modifier.heightIn(max = 420.dp).verticalScroll(rememberScrollState()),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Paste newly authorized URLs for this same recording. Go must verify every stored fragment and timeline before resuming. URLs stay only in this temporary form and the encrypted request store.")
-                    OutlinedTextField(value = refreshRootUrl, onValueChange = { refreshRootUrl = it },
-                        label = { Text("Refreshed root manifest URL") }, singleLine = true)
-                    OutlinedTextField(value = refreshVideoUrl, onValueChange = { refreshVideoUrl = it },
-                        label = { Text("Selected video playlist / MPD URL") }, singleLine = true)
-                    OutlinedTextField(value = refreshAudioUrl, onValueChange = { refreshAudioUrl = it },
-                        label = { Text("Selected audio playlist / MPD URL") }, singleLine = true)
-                    Text("Requires an active interrupted session. Sources needing new cookie/header authorization must first be re-captured in Live locator. A rejected refresh never deletes recorded bytes.")
+        MP11P04RefreshDialog(
+            root = refreshRootUrl, video = refreshVideoUrl, audio = refreshAudioUrl,
+            onRoot = { refreshRootUrl = it }, onVideo = { refreshVideoUrl = it },
+            onAudio = { refreshAudioUrl = it }, onDismiss = clearRefresh,
+            onApprove = {
+                // UI origin preflight is not authority; the encrypted handoff and
+                // Go MP10 durable session-wide proof remain mandatory.
+                if (!MP11LiveUiPolicy.validRefresh(refreshRootUrl, refreshVideoUrl, refreshAudioUrl)) {
+                    liveFeedback = "Source refresh refused."
+                } else {
+                    val root = refreshRootUrl.trim()
+                    val video = refreshVideoUrl.trim()
+                    val audio = refreshAudioUrl.trim()
+                    clearRefresh()
+                    val generation = System.currentTimeMillis()
+                    val accepted = runCatching {
+                        MediaRequestHandoffStore.rememberCapture(
+                            captureId = id, headers = emptyMap(),
+                            redactedSummary = "MP11 user-approved live source refresh",
+                            isExpiringUrl = true, exactUrl = root,
+                            expiresAtEpochMs = generation + 600_000L,
+                            subjectGeneration = generation,
+                        )
+                    }.getOrDefault(false)
+                    if (!accepted) {
+                        liveFeedback = "Encrypted authorization update refused. No refresh was submitted. (" +
+                            MP11P04Diagnostics.code(MP11P04Diagnostics.Area.Refresh,
+                                MP11P04Diagnostics.Outcome.Refused) + ")"
+                    } else {
+                        val request = Intent(context, AndroidLiveRecordingService::class.java).apply {
+                            action = AndroidLiveRecordingService.REFRESH_AUTHORIZATION
+                            putExtra(AndroidLiveRecordingService.CAPTURE, id)
+                            putExtra(AndroidLiveRecordingService.USER_CONFIRMED_REFRESH, true)
+                            putExtra(AndroidLiveRecordingService.REFRESH_ROOT, root)
+                            putExtra(AndroidLiveRecordingService.REFRESH_VIDEO, video)
+                            putExtra(AndroidLiveRecordingService.REFRESH_AUDIO, audio)
+                            putExtra(AndroidLiveRecordingService.REFRESH_GENERATION, generation)
+                        }
+                        val sent = runCatching {
+                            AndroidLiveRecordingService.refreshAuthorized(context, request)
+                        }.isSuccess
+                        liveFeedback = if (sent) "Refresh requested. Go must verify identity, every stored fragment and stream overlap."
+                            else "Refresh not submitted. Stored fragments remain. (" +
+                                MP11P04Diagnostics.code(MP11P04Diagnostics.Area.Refresh,
+                                    MP11P04Diagnostics.Outcome.Unavailable) + ")"
+                    }
                 }
             },
-            confirmButton = {
-                Button(enabled = MP11LiveUiPolicy.validRefresh(refreshRootUrl, refreshVideoUrl, refreshAudioUrl),
-                    onClick = {
-                        val root = refreshRootUrl.trim()
-                        val video = refreshVideoUrl.trim()
-                        val audio = refreshAudioUrl.trim()
-                        clearRefresh()
-                        val generation = System.currentTimeMillis()
-                        val accepted = runCatching {
-                            MediaRequestHandoffStore.rememberCapture(
-                                captureId = id, headers = emptyMap(),
-                                redactedSummary = "MP11 user-approved live source refresh",
-                                isExpiringUrl = true, exactUrl = root,
-                                expiresAtEpochMs = generation + 600_000L,
-                                subjectGeneration = generation,
-                            )
-                        }.getOrDefault(false)
-                        if (!accepted) {
-                            liveFeedback = "Encrypted authorization update was refused. No refresh was submitted."
-                        } else {
-                            val request = Intent(context, AndroidLiveRecordingService::class.java).apply {
-                                action = AndroidLiveRecordingService.REFRESH_AUTHORIZATION
-                                putExtra(AndroidLiveRecordingService.CAPTURE, id)
-                                putExtra(AndroidLiveRecordingService.USER_CONFIRMED_REFRESH, true)
-                                putExtra(AndroidLiveRecordingService.REFRESH_ROOT, root)
-                                putExtra(AndroidLiveRecordingService.REFRESH_VIDEO, video)
-                                putExtra(AndroidLiveRecordingService.REFRESH_AUDIO, audio)
-                                putExtra(AndroidLiveRecordingService.REFRESH_GENERATION, generation)
-                            }
-                            val sent = runCatching { AndroidLiveRecordingService.refreshAuthorized(context, request) }.isSuccess
-                            liveFeedback = if (sent) "Refresh requested. Go must prove source identity, every stored fragment and stream overlap before recording resumes."
-                                else "Refresh could not be sent. Stored fragments remain available for review."
-                        }
-                    }) { Text("Verify & reauthorize") }
-            },
-            dismissButton = { TextButton(onClick = clearRefresh) { Text("Cancel") } },
         )
     }
     liveFeedback?.let { message ->
@@ -610,40 +609,32 @@ fun MediaInboxScreen(
             confirmButton = { TextButton(onClick = { liveFeedback = null }) { Text("OK") } })
     }
     recoveryCaptureId?.let { id ->
-        AlertDialog(onDismissRequest = { recoveryCaptureId = null },
-            title = { Text("Review interrupted recording") },
-            text = { Text(when (recoveryReviewState) {
-                "publication_pending_review" -> "Publication was interrupted. $recoveryFragments stored fragments remain; playback status must be reviewed before any new recording. Resuming is blocked."
-                "published_cleanup_pending" -> "Recording was published before interruption. $recoveryFragments transient fragments may remain for explicit cleanup; resuming is blocked."
-                "empty_session_review_required" -> "This interrupted session has no committed media. You can explicitly discard its session journal or keep it for review."
-                "inventory_unavailable_review" -> "The local fragment inventory is unreadable or damaged. The recording cannot be resumed or considered saved. You may explicitly request capture-scoped removal; suspicious files or ambiguous publication will still be refused."
-                "journal_missing_review_required" -> "Stored fragments lack a verified session journal. $recoveryFragments fragments require review or explicit discard; resuming is blocked."
-                else -> "$recoveryFragments stored fragments remain. A fresh authorized source and complete readback are required before resuming."
-            }) },
-            confirmButton = {
-                if (recoveryReviewState != "publication_pending_review") TextButton(onClick = {
-                    recoveryCaptureId = null
+        MP11P04RecoveryDialog(
+            state = recoveryReviewState, fragments = recoveryFragments,
+            // Keep the legacy MP09 recovery action contract attached to the
+            // production call. The extracted composable renders this exact label.
+            resumeLabel = "Reauthorize & resume",
+            onDiscard = {
+                recoveryCaptureId = null
                 inspectScope.launch {
                     val result = runCatching { goManifestClient.liveAction(id, "discard_recovery") }.getOrNull()
                     liveFeedback = if (result?.ok == true && result.status == "discarded_verified")
-                        "Interrupted fragments were removed and verified." else
-                        "Cleanup was not confirmed; stored fragments were not marked removed."
+                        "Interrupted fragments removed and independently verified."
+                    else "Cleanup not confirmed. Stored fragments were not marked removed. (" +
+                        MP11P04Diagnostics.code(MP11P04Diagnostics.Area.Recovery,
+                            MP11P04Diagnostics.Outcome.VerificationRequired) + ")"
                 }
-                }) { Text("Discard fragments") }
             },
-            dismissButton = {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    if (recoveryReviewState == "recovery_review_required" && recoveryFragments > 0) TextButton(onClick = {
-                        recoveryCaptureId = null
-                        val capture = capturesById[id]
-                        if (capture != null) {
-                            userSelectedResumeCaptureId = id
-                            onInspectGoManifest(capture)
-                        } else liveFeedback = "Original capture not found; refresh the authorized source."
-                    }) { Text("Reauthorize & resume") }
-                    TextButton(onClick = { recoveryCaptureId = null }) { Text("Keep") }
-                }
-            })
+            onResume = {
+                recoveryCaptureId = null
+                val capture = capturesById[id]
+                if (capture != null) {
+                    userSelectedResumeCaptureId = id
+                    onInspectGoManifest(capture)
+                } else liveFeedback = "Original capture unavailable; refreshed authorization required."
+            },
+            onKeep = { recoveryCaptureId = null },
+        )
     }
     if (inspectingManifest != null) {
         AlertDialog(

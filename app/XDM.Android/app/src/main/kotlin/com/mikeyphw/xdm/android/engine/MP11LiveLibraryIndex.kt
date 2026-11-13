@@ -35,7 +35,22 @@ internal object MP11LiveLibraryIndex {
         val app = context.applicationContext
         val root = File(app.filesDir, "xgo-mp08b-stage")
         val published = File(root, "publication-receipts")
-        if (!published.exists()) return MP11LiveLibrarySnapshot()
+        if (!published.exists()) {
+            // A process may die before MP08 creates any publication receipt.
+            // The MP09 journal can still prove that recovery review is needed.
+            val store = AndroidLiveDurableFragmentStore(app)
+            val review = captures.distinctBy { it.id }.take(128).mapNotNull { capture ->
+                if (!captureId.matches(capture.id)) return@mapNotNull null
+                val phase = verifiedPhase(store, capture.id)
+                if (phase !in setOf("recording", "publishing", "published", "published_clean"))
+                    return@mapNotNull null
+                MP11LiveLibraryReview(capture.id, capture.title,
+                    "No verified published file. Recovery or cleanup review required (" +
+                        MP11P04Diagnostics.code(MP11P04Diagnostics.Area.Library,
+                            MP11P04Diagnostics.Outcome.VerificationRequired) + ")")
+            }
+            return MP11LiveLibrarySnapshot(review = review)
+        }
         if (!safeDirectory(app.filesDir, root) || !safeDirectory(app.filesDir, published))
             return MP11LiveLibrarySnapshot(review = listOf(MP11LiveLibraryReview("", "Live recordings", "Unsafe publication receipt directory; no files were opened")))
         val files = published.listFiles()?.takeIf { it.size <= 4096 }
@@ -97,7 +112,9 @@ internal object MP11LiveLibraryIndex {
                     throw cancelled
                 } catch (_: Exception) { null }
                 if (item == null) review += MP11LiveLibraryReview(capture.id, capture.title,
-                    "Publication, source phase or saved bytes could not be verified")
+                    "Publication, source phase or saved bytes could not be verified (" +
+                        MP11P04Diagnostics.code(MP11P04Diagnostics.Area.Library,
+                            MP11P04Diagnostics.Outcome.VerificationRequired) + ")")
                 else verified += item
             }
         }

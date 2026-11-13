@@ -19,6 +19,7 @@ import com.mikeyphw.xdm.android.engine.MP11LiveLibraryCapture
 import com.mikeyphw.xdm.android.engine.MP11LiveLibraryIndex
 import com.mikeyphw.xdm.android.engine.MP11LiveLibrarySnapshot
 import com.mikeyphw.xdm.android.engine.MP11VerifiedLiveRecording
+import com.mikeyphw.xdm.android.engine.MP11P04Diagnostics
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -122,7 +123,9 @@ fun MediaLibraryScreen(
         liveScope.launch {
             val current = withContext(Dispatchers.IO) { MP11LiveLibraryIndex.stillVerified(context, item) }
             if (!current) {
-                liveActionError = "Saved media could not be reverified. The file was not opened or shared."
+                liveActionError = "Saved media could not be reverified. The file was not opened or shared. (" +
+                    MP11P04Diagnostics.code(MP11P04Diagnostics.Area.Library,
+                        MP11P04Diagnostics.Outcome.VerificationRequired) + ")"
                 liveRefreshVersion++
             } else if (share) {
                 shareMediaFile(context, item.mediaStoreUri, "video/mp4", item.title)
@@ -195,20 +198,11 @@ fun MediaLibraryScreen(
                 }
                 LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                     items(visibleLive, key = { "mp11_live:${it.captureId}:${it.publicationId}" }) { recording ->
-                        XdmListCard {
-                            Column(Modifier.width(250.dp).padding(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(7.dp)) {
-                                XdmCardTitle(recording.title, maxLines = 2)
-                                XdmMetadataText("${recording.bytes.formatBytes()} • MP4")
-                                XdmSupportingText(if (recording.cleanupPending)
-                                    "Published and playable; temporary cleanup needs review"
-                                    else "Published and playable; cleanup verified", maxLines = 2)
-                                XdmActionFlowRow {
-                                    Button(onClick = { onLiveMediaAction(recording, false) }) { Text("Open") }
-                                    TextButton(onClick = { selectedLiveDetails = recording }) { Text("Details") }
-                                }
-                            }
-                        }
+                        MP11P04VerifiedLiveTile(
+                            item = recording,
+                            onOpen = { onLiveMediaAction(recording, false) },
+                            onDetails = { selectedLiveDetails = recording },
+                        )
                     }
                 }
             }
@@ -219,7 +213,7 @@ fun MediaLibraryScreen(
                     verticalArrangement = Arrangement.spacedBy(6.dp)) {
                     XdmSectionLabel("Live recordings requiring review")
                     liveSnapshot.review.take(3).forEach { review ->
-                        XdmSupportingText("${review.title}: ${review.reason}", maxLines = 3)
+                        MP11P04ReviewOnlyRow(review)
                     }
                     if (liveSnapshot.review.size > 3)
                         XdmMetadataText("${liveSnapshot.review.size - 3} more review item(s)")
