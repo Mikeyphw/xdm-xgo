@@ -166,5 +166,32 @@ class GateTests(unittest.TestCase):
             self.assertEqual(race.returncode, 0,
                 'P05 HOSTED GO RACE CHECK REQUIRED: '+race.stdout[-4000:])
 
+    def test_mp12_p06_real_final_qualification_adversarial_source_gate(self):
+        # P06 SOURCE ONLY: hosted race/ledger gates; never device/release/cutover.
+        import os, subprocess
+        source = Path(__file__).with_name('mp12_p06_final_qualification.py')
+        tests = Path(__file__).with_name('test_mp12_p06_final_qualification.py')
+        self.assertTrue(source.is_file() and tests.is_file())
+        for argv in ((sys.executable, '-B', str(tests)),
+                     (sys.executable, '-B', str(source), 'source-only',
+                      '--repo', str(Path(__file__).resolve().parents[1]))):
+            p = subprocess.run(argv, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, timeout=120, check=False)
+            self.assertEqual(p.returncode, 0, p.stdout[-3500:])
+        if os.environ.get('GITHUB_ACTIONS') == 'true':
+            env = subprocess.run(['go', 'env', 'GOOS', 'GOARCH', 'CGO_ENABLED'],
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, timeout=45, check=False)
+            self.assertEqual(env.returncode, 0, env.stdout[-1000:])
+            self.assertEqual(env.stdout.split(), ['linux', 'amd64', '1'],
+                'P06 Go race gate must execute on hosted CGO Linux amd64')
+            p = subprocess.run(['go', 'test', '-race', '-count=1',
+                                './runtime/canary'],
+                cwd=str(Path(__file__).resolve().parents[1]/'engine'),
+                stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                text=True, timeout=360, check=False)
+            self.assertEqual(p.returncode, 0,
+                'P06 HOSTED ROLLBACK RACE CHECK: '+p.stdout[-4000:])
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
