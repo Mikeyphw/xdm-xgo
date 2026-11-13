@@ -84,6 +84,12 @@ jobs:
             ${{ runner.temp }}/xgo-targeted-go-mod
             ${{ runner.temp }}/xgo-targeted-go-build
           key: ${{ runner.os }}-xgo-targeted-go123-v1-${{ hashFiles('engine/go.mod', 'engine/go.sum') }}
+      - name: MP12 P01 fixed evidence ledger source regressions (NOT release qualification)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B scripts/test_mp12_qualification.py
+          python3 -B scripts/mp12_qualification.py --source-only
       - name: Execute classified contracts and negative tests (no local/hosted Gradle)
         env:
           BASE_SHA: ${{ needs.scope.outputs.base_sha }}
