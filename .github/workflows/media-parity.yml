@@ -193,3 +193,12 @@ jobs:
           path: app/XDM.Android/app/build/outputs/androidTest-results/connected/**/*.xml
           if-no-files-found: warn
           retention-days: 14
+
+      - name: Retain bounded P04 crash diagnosis (no raw logcat or credentials)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: mp11-p04-api36-crash-diagnostic
+          path: app/XDM.Android/app/build/outputs/androidTest-results/connected/mp11-p04-crash-diagnostic.json
+          if-no-files-found: warn
+          retention-days: 14

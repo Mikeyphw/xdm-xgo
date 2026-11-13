@@ -6,6 +6,7 @@ receipt. A local self-test exercises only this receipt parser's fail-closed rule
 """
 from __future__ import annotations
 import argparse
+import json
 import os
 import re
 import subprocess
@@ -64,6 +65,69 @@ def cmd(*args: str, timeout: int = 80) -> str:
     if p.returncode: raise Refused('MP11_P04_HOST_COMMAND_FAILED_' + str(args[0]).upper())
     return p.stdout.strip()
 
+
+# Only closed-set diagnostic codes leave the ephemeral API36 emulator.
+# Never print, upload or persist raw logcat, URIs, signed requests or tokens.
+def capture_crash_diagnostic(serial: str, output: Path) -> str:
+    code = 'UNCLASSIFIED_ANDROID_TEST_FAILURE'
+    try:
+        p = subprocess.run(
+            ['adb', '-s', serial, 'logcat', '-d', '-b', 'crash', '-v', 'brief'],
+            stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True,
+            timeout=15, check=False,
+        )
+        if p.returncode == 0:
+            raw = p.stdout[-600000:]
+            signatures = (
+                ('java.lang.UnsatisfiedLinkError', 'NATIVE_LIBRARY_LINK_ERROR'),
+                ('java.lang.NoClassDefFoundError', 'MISSING_RUNTIME_CLASS'),
+                ('java.lang.ClassNotFoundException', 'CLASS_NOT_FOUND'),
+                ('java.lang.ExceptionInInitializerError', 'STATIC_INITIALIZER_FAILURE'),
+                ('java.lang.SecurityException', 'ANDROID_SECURITY_EXCEPTION'),
+                ('java.lang.IllegalStateException', 'ILLEGAL_STATE_EXCEPTION'),
+                ('java.lang.RuntimeException', 'RUNTIME_EXCEPTION'),
+                ('Fatal signal 11', 'NATIVE_SIGSEGV'),
+                ('Fatal signal 6', 'NATIVE_SIGABRT'),
+                ('FATAL EXCEPTION', 'JAVA_FATAL_EXCEPTION'),
+            )
+            for signature, reason in signatures:
+                if signature in raw:
+                    code = reason
+                    break
+            if not raw.strip():
+                code = 'EMPTY_CRASH_BUFFER'
+        else:
+            code = 'CRASH_BUFFER_READ_FAILED'
+    except (subprocess.TimeoutExpired, OSError):
+        code = 'CRASH_BUFFER_UNAVAILABLE'
+    # If the crash buffer has no actionable signature, use only bounded JUnit
+    # markers (never a test's raw message or a credential-bearing stack trace).
+    if code in ('UNCLASSIFIED_ANDROID_TEST_FAILURE', 'EMPTY_CRASH_BUFFER') and output.is_dir():
+        for report in list(output.rglob('*.xml'))[:96]:
+            if report.is_symlink() or report.stat().st_size > 8 * 1024 * 1024:
+                continue
+            content = report.read_bytes()
+            if b'Process crashed' in content and b'tests="0"' in content:
+                code = 'INSTRUMENTATION_PROCESS_CRASHED_ZERO_CASES'
+                break
+            if b'<failure' in content or b'<error' in content:
+                code = 'INSTRUMENTED_CASE_FAILURE'
+                break
+    output.mkdir(parents=True, exist_ok=True)
+    receipt = {
+        'schema': 'mp11-p04-crash-code-v1',
+        'reason_code': code,
+        'raw_logcat_uploaded': False,
+        'accepted_test_cases': 0,
+        'api36_qualified': False,
+        'arm64_qualified': False,
+    }
+    (output / 'mp11-p04-crash-diagnostic.json').write_text(
+        json.dumps(receipt, sort_keys=True) + '\n', encoding='utf-8',
+    )
+    print('MP11_P04_CRASH_DIAGNOSTIC_CODE=' + code, flush=True)
+    return code
+
 def run_api36() -> None:
     expected = os.environ.get('MP11_P04_EXPECTED_SHA', '')
     if not TOKEN.fullmatch(expected) or os.environ.get('MP11_P04_OPTED_IN') != 'true':
@@ -79,6 +143,9 @@ def run_api36() -> None:
         raise Refused('MP11_P04_EMULATOR_REQUIRED')
     if cmd('adb', '-s', ready[0], 'shell', 'getprop', 'ro.product.cpu.abi') != 'x86_64':
         raise Refused('MP11_P04_X86_64_REQUIRED')
+    # Clear only the disposable emulator crash buffer so a receipt cannot
+    # accidentally classify a previous invocation as the current failure.
+    cmd('adb', '-s', ready[0], 'logcat', '-c', '-b', 'crash')
     android = Path('app/XDM.Android')
     output = android / 'app/build/outputs/androidTest-results/connected'
     # Do not trust old reports from another commit or earlier instrumentation.
@@ -88,12 +155,15 @@ def run_api36() -> None:
     started = time.time() - 3
     print('MP11_P04_API36_REAL_COMPOSE_INTERACTIONS_BEGIN', flush=True)
     args = ['./gradlew', '--no-daemon', '--max-workers=2', ':app:connectedDebugAndroidTest',
+        '-Pxdm.mp11P04UiIsolatedHost=true',
         '-Pandroid.testInstrumentationRunnerArguments.class=' + CLASS]
     try:
         p = subprocess.run(args, cwd=android, timeout=2700, check=False)
     except subprocess.TimeoutExpired:
         raise Refused('MP11_P04_API36_GRADLE_TIMEOUT')
-    if p.returncode: raise Refused('MP11_P04_API36_GRADLE_FAILED')
+    if p.returncode:
+        reason = capture_crash_diagnostic(ready[0], output)
+        raise Refused('MP11_P04_API36_GRADLE_FAILED_' + reason)
     verify_receipts(output, started, real_execution=True)
 
 def self_test() -> None:

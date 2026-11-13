@@ -1,5 +1,8 @@
 package com.mikeyphw.xdm.android
 
+import android.app.Application
+import android.content.Context
+import androidx.test.runner.AndroidJUnitRunner
 import androidx.compose.foundation.layout.Column
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -146,5 +149,20 @@ class MP11P04LiveRecordingUiInstrumentedTest {
         composeRule.onNodeWithTag(MP11P04Tags.OpenVerified).assertExists().performClick()
         composeRule.onNodeWithTag(MP11P04Tags.Details).assertExists().performClick()
         composeRule.runOnIdle { assertEquals(1, opens.value); assertEquals(1, details.value) }
+    }
+}
+
+/**
+ * MP11 P04 Compose-only host. Activated ONLY through the explicit Gradle property
+ * xdm.mp11P04UiIsolatedHost=true. No Go engine, Room, JNI or media service is
+ * started by this isolated test process. Production and all other Android tests
+ * retain the real XdmApplication. This is UI evidence, never engine qualification.
+ */
+class MP11P04IsolatedComposeRunner : AndroidJUnitRunner() {
+    override fun newApplication(cl: ClassLoader, className: String, context: Context): Application {
+        require(className == XdmApplication::class.java.name) {
+            "MP11_P04_UNEXPECTED_APPLICATION_CLASS"
+        }
+        return super.newApplication(cl, Application::class.java.name, context)
     }
 }
