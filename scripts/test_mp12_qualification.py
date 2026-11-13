@@ -118,5 +118,22 @@ class GateTests(unittest.TestCase):
                            text=True, timeout=90, check=False)
         self.assertEqual(p.returncode, 0, p.stdout[-2400:])
 
+    def test_mp12_p04_signed_release_source_and_mutation_gate(self):
+        # This executes the P04 fixture matrix and its actual source pins via
+        # the existing MP12 P01 targeted workflow; never certifies signing.
+        import subprocess
+        tests = Path(__file__).with_name('test_mp12_p04_signed_release.py')
+        source = Path(__file__).with_name('mp12_p04_signed_release.py')
+        self.assertTrue(tests.is_file() and source.is_file())
+        for command in ((sys.executable, '-B', str(tests)),
+                        (sys.executable, '-B', str(source), 'source-only',
+                         '--repo', str(Path(__file__).resolve().parents[1])),
+                        (sys.executable, '-B', str(Path(__file__).with_name('test_xgo_hf18_ci_dispatch.py'))),
+                        (sys.executable, '-B', str(Path(__file__).with_name('test_xgo_hf19_arm64_runtime_gate.py')))):
+            proc = subprocess.run(command, stdout=subprocess.PIPE,
+                                  stderr=subprocess.STDOUT, text=True,
+                                  timeout=120, check=False)
+            self.assertEqual(proc.returncode, 0, proc.stdout[-4000:])
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
