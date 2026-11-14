@@ -12,7 +12,7 @@ BUILDER = ROOT / 'app/XDM.Android/tools/build-aria2-runtime.py'
 COMMON = ROOT / 'app/XDM.Android/tools/run-final-common-validation.sh'
 WF = ROOT / '.github/workflows/android.yml'
 SSL = ROOT / 'app/XDM.Android/tools/android_native_openssl.py'
-SIGNED_RELEASE_SHA256 = 'f84b6fe9830f938250e406b62087002558819fc95f333fe04219ae66ca8becd3'  # HF18 verified release baseline
+SIGNED_RELEASE_SHA256 = '07f28376b630f5acf9bd6a1b1db873926e0e6e8bd7e2c98883ee37cbeb2836ed'  # HF18 verified release baseline
 
 class HF19(unittest.TestCase):
     def test_openssl_legacy_remains_disabled(self):
@@ -87,8 +87,25 @@ class HF19(unittest.TestCase):
 
     def test_no_automatic_translation_and_no_duplicate_ci(self):
         src = WF.read_text()
-        self.assertIn("    branches: [main]\n    tags: ['android-v*']",src)
-        self.assertIn('  pull_request:',src)
+        events = src.split('on:\n',1)[1].split('\npermissions:\n',1)[0]
+        self.assertIn("  push:\n    tags: ['android-v*']",events)
+        self.assertIn('  workflow_dispatch:',events)
+        self.assertNotIn('  pull_request:',events)
+        self.assertNotIn('    branches: [main]',events)
+        targeted = (ROOT / '.github/workflows/xgo-targeted.yml').read_text()
+        media = (ROOT / '.github/workflows/xgo-mp08b3-acceptance.yml').read_text()
+        target_events = targeted.split('on:\n',1)[1].split('\npermissions:\n',1)[0]
+        media_events = media.split('on:\n',1)[1].split('\npermissions:\n',1)[0]
+        self.assertIn('  pull_request:',target_events)
+        self.assertIn("  push:\n    branches: [main]",target_events)
+        self.assertIn('  pull_request:',media_events)
+        self.assertIn('default: false',media_events)
+        self.assertIn('  signed-release:\n',src)
+        release=src.split('\n  signed-release:\n',1)[1].split('\n  emulator-compatibility:\n',1)[0]
+        self.assertIn("if: startsWith(github.ref, 'refs/tags/android-v')",release)
+        self.assertIn('XDM_RELEASE_SIGNER_SHA256',release)
+        self.assertIn('XDM_XAR16_FULL_RELEASE_GATE',release)
+        self.assertNotIn('continue-on-error: true',release)
         i=src.split('\n  instrumentation:\n',1)[1].split('\n  signed-release:\n',1)[0]
         self.assertIn("if: github.event_name == 'workflow_dispatch' && inputs.arm64_translation_diagnostic",i)
         self.assertIn('run-hosted-emulator-instrumentation.sh --device',i)

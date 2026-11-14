@@ -11,6 +11,18 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.lazy.LazyRow
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.rememberCoroutineScope
+import com.mikeyphw.xdm.android.engine.MP11LiveLibraryCapture
+import com.mikeyphw.xdm.android.engine.MP11LiveLibraryIndex
+import com.mikeyphw.xdm.android.engine.MP11LiveLibrarySnapshot
+import com.mikeyphw.xdm.android.engine.MP11VerifiedLiveRecording
+import com.mikeyphw.xdm.android.engine.MP11P04Diagnostics
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
@@ -86,6 +98,42 @@ fun MediaLibraryScreen(
     var pendingDeleteItem by remember { mutableStateOf<OfflineMediaLibraryItem?>(null) }
     var pendingRemoveItem by remember { mutableStateOf<OfflineMediaLibraryItem?>(null) }
     val downloadsById = remember(downloads) { downloads.associateBy(Download::id) }
+    // Verified Go live publications are intentionally projected from MP08 receipts,
+    // not invented as completed Room downloads or transient service notifications.
+    val liveScope = rememberCoroutineScope()
+    val liveCaptures = remember(captures) {
+        captures.map { MP11LiveLibraryCapture(it.id, it.title.ifBlank { it.fileName }) }.take(128)
+    }
+    var liveRefreshVersion by remember { mutableStateOf(0) }
+    var liveSnapshot by remember { mutableStateOf(MP11LiveLibrarySnapshot()) }
+    var selectedLiveDetails by remember { mutableStateOf<MP11VerifiedLiveRecording?>(null) }
+    var liveActionError by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(liveCaptures, liveRefreshVersion) {
+        liveSnapshot = withContext(Dispatchers.IO) { MP11LiveLibraryIndex.scan(context, liveCaptures) }
+    }
+    val visibleLive = remember(liveSnapshot, filter, sort) {
+        val rows = if (filter == MediaLibraryFilter.Audio) emptyList() else liveSnapshot.verified
+        when (sort) {
+            LibrarySort.Recent -> rows.sortedByDescending { it.modifiedEpochMs }
+            LibrarySort.Title -> rows.sortedBy { it.title.lowercase() }
+            LibrarySort.Size -> rows.sortedByDescending { it.bytes }
+        }
+    }
+    val onLiveMediaAction: (MP11VerifiedLiveRecording, Boolean) -> Unit = { item, share ->
+        liveScope.launch {
+            val current = withContext(Dispatchers.IO) { MP11LiveLibraryIndex.stillVerified(context, item) }
+            if (!current) {
+                liveActionError = "Saved media could not be reverified. The file was not opened or shared. (" +
+                    MP11P04Diagnostics.code(MP11P04Diagnostics.Area.Library,
+                        MP11P04Diagnostics.Outcome.VerificationRequired) + ")"
+                liveRefreshVersion++
+            } else if (share) {
+                shareMediaFile(context, item.mediaStoreUri, "video/mp4", item.title)
+            } else {
+                openMediaFile(context, item.mediaStoreUri, "video/mp4")
+            }
+        }
+    }
     val visibleItems = remember(allItems, filter, sort, downloadsById) {
         val filtered = consumerPlanner.filterLibrary(allItems, filter, System.currentTimeMillis())
         when (sort) {
@@ -115,9 +163,9 @@ fun MediaLibraryScreen(
         ) {
             XdmMetricStrip(
                 metrics = listOf(
-                    XdmMetric("Items", allItems.size.toString()),
-                    XdmMetric("Playable", playableCount.toString()),
-                    XdmMetric("Stored", storedBytes.formatBytes()),
+                    XdmMetric("Items", (allItems.size + liveSnapshot.verified.size).toString()),
+                    XdmMetric("Playable", (playableCount + liveSnapshot.verified.size).toString()),
+                    XdmMetric("Stored", (storedBytes + liveSnapshot.verified.sumOf { it.bytes }).formatBytes()),
                 ),
             )
             XdmSegmentedControl(
@@ -137,17 +185,53 @@ fun MediaLibraryScreen(
             }
         }
 
-        if (visibleItems.isEmpty()) {
+        // Independent verified-publication section. A bare MP08 receipt is
+        // insufficient: MP09 sealed phase AND complete MediaStore readback must pass.
+        if (visibleLive.isNotEmpty()) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                XdmSectionLabel("Verified live recordings")
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically) {
+                    XdmMetadataText("${visibleLive.size} verified MP4 file(s) • rechecked before playback")
+                    TextButton(onClick = { liveRefreshVersion++ }) { Text("Refresh") }
+                }
+                LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                    items(visibleLive, key = { "mp11_live:${it.captureId}:${it.publicationId}" }) { recording ->
+                        MP11P04VerifiedLiveTile(
+                            item = recording,
+                            onOpen = { onLiveMediaAction(recording, false) },
+                            onDetails = { selectedLiveDetails = recording },
+                        )
+                    }
+                }
+            }
+        }
+        if (liveSnapshot.review.isNotEmpty()) {
+            XdmGroupedList {
+                Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    XdmSectionLabel("Live recordings requiring review")
+                    liveSnapshot.review.take(3).forEach { review ->
+                        MP11P04ReviewOnlyRow(review)
+                    }
+                    if (liveSnapshot.review.size > 3)
+                        XdmMetadataText("${liveSnapshot.review.size - 3} more review item(s)")
+                    TextButton(onClick = onFindMedia) { Text("Review in Media") }
+                }
+            }
+        }
+        if (visibleItems.isEmpty() && visibleLive.isEmpty()) {
             XdmEmptyState(
-                title = if (allItems.isEmpty()) "No media yet" else "Nothing in this filter",
-                description = if (allItems.isEmpty()) {
+                title = if (allItems.isEmpty() && liveSnapshot.verified.isEmpty()) "No media yet" else "Nothing in this filter",
+                description = if (allItems.isEmpty() && liveSnapshot.verified.isEmpty()) {
                     "Completed video and audio will appear here automatically."
                 } else {
                     "Choose another filter to see your completed media."
                 },
                 modifier = Modifier.weight(1f),
-                actionLabel = if (allItems.isEmpty()) "Find media" else null,
-                onAction = if (allItems.isEmpty()) onFindMedia else null,
+                actionLabel = if (allItems.isEmpty() && liveSnapshot.verified.isEmpty()) "Find media" else null,
+                onAction = if (allItems.isEmpty() && liveSnapshot.verified.isEmpty()) onFindMedia else null,
             )
         } else if (LocalXdmWindowClass.current == XdmWindowClass.Compact) {
             LazyColumn(
@@ -208,6 +292,37 @@ fun MediaLibraryScreen(
         }
     }
 
+    selectedLiveDetails?.let { item ->
+        AlertDialog(
+            onDismissRequest = { selectedLiveDetails = null },
+            title = { Text("Verified live recording") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    XdmCardTitle(item.title, maxLines = 2)
+                    XdmMetadataText("${item.fileName} • ${item.bytes.formatBytes()}")
+                    XdmSupportingText(if (item.cleanupPending)
+                        "MP08 and MP09 publication are verified. Temporary segment cleanup still needs review."
+                        else "MP08 and MP09 publication verified; temporary fragment cleanup confirmed.")
+                    XdmMetadataText("Publication: ${item.publicationId}")
+                    XdmMetadataText("MediaStore file; reverified before Open or Share.")
+                }
+            },
+            confirmButton = {
+                Button(onClick = { onLiveMediaAction(item, false) }) { Text("Open") }
+            },
+            dismissButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = { onLiveMediaAction(item, true) }) { Text("Share") }
+                    TextButton(onClick = { selectedLiveDetails = null }) { Text("Close") }
+                }
+            },
+        )
+    }
+    liveActionError?.let { warning ->
+        AlertDialog(onDismissRequest = { liveActionError = null },
+            title = { Text("File verification required") }, text = { Text(warning) },
+            confirmButton = { TextButton(onClick = { liveActionError = null }) { Text("OK") } })
+    }
     selectedPlayerItem?.let { item ->
         XdmAdaptiveSheet(
             visible = true,

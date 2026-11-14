@@ -27,18 +27,31 @@ class HF18CiTopology(unittest.TestCase):
 
     def test_pr_once_and_release_tags_not_filtered(self):
         events = event_block(self.android)
-        self.assertIn("  push:\n    branches: [main]\n    tags: ['android-v*']\n", events)
-        self.assertIn('  pull_request:\n    paths:', events)
+        self.assertIn("  push:\n    tags: ['android-v*']", events)
         self.assertIn('  workflow_dispatch:', events)
-        self.assertEqual(events.count("      - 'scripts/test_xgo_hf18_ci_dispatch.py'"), 2)
+        self.assertNotIn('  pull_request:', events)
+        self.assertNotIn('    branches: [main]', events)
+        job = section(self.android, 'signed-release', 'emulator-compatibility')
+        self.assertIn("if: startsWith(github.ref, 'refs/tags/android-v')", job)
+        self.assertIn('XDM_XAR16_FULL_RELEASE_GATE', job)
 
     def test_engine_push_main_only_and_pr_retained(self):
-        events = event_block(self.devtool)
-        self.assertIn('  push:\n    branches: [main]\n    paths:', events)
-        self.assertIn('  pull_request:\n    paths:', events)
-        self.assertIn('  workflow_dispatch:', events)
-        self.assertIn('  pull_request:\n', event_block(self.modern))
-        self.assertIn('    branches: [master, main, modern]', event_block(self.modern))
+        # The former all-in-one PR/main jobs were intentionally replaced by
+        # the dedicated CI05 targeted PR/main and MP08B3 source/media lanes.
+        for workflow in (self.devtool, self.modern):
+            events = event_block(workflow)
+            self.assertIn('  workflow_dispatch:', events)
+            self.assertNotIn('  pull_request:', events)
+            self.assertNotIn('  push:', events)
+        targeted = (ROOT / '.github/workflows/xgo-targeted.yml').read_text()
+        media = (ROOT / '.github/workflows/xgo-mp08b3-acceptance.yml').read_text()
+        self.assertIn('  pull_request:', event_block(targeted))
+        self.assertIn("  push:\n    branches: [main]", event_block(targeted))
+        self.assertIn('XGO targeted checks passed (NOT full qualification)', targeted)
+        self.assertIn('  pull_request:', event_block(media))
+        self.assertIn('Source contracts and real Linux FFmpeg golden', media)
+        self.assertIn('x86_64_media_test:', media)
+        self.assertIn('default: false', media)
 
     def test_native_emulator_only_opt_in_diagnostics(self):
         job = section(self.android, 'instrumentation', 'signed-release')

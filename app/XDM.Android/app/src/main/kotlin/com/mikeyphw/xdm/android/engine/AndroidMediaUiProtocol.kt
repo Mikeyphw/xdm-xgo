@@ -35,6 +35,19 @@ data class AndroidMediaUiCommandResult(
     val manifestGraph: ManifestGraphV1Contract.Graph? = null,
     val manifestRevision: String? = null,
     val manifestSelectionPlan: ManifestSelectionV1Contract.Plan? = null,
+    val nextPollAfterMs: Long = 3_000L,
+    val allTracksEnded: Boolean = false,
+    val recoveryFragments: Int = 0,
+    val cleanupPending: Boolean = false,
+    /** Transient only. Never write a signed MPD URL into saved UI state. */
+    val liveManifestUrl: String? = null,
+    val videoRepresentationId: String? = null,
+    val audioRepresentationId: String? = null,
+    // MP11: read-only active session counters; never a playable-file proof.
+    val liveDurableFragments: Int = 0,
+    val liveDurableBytes: Long = 0L,
+    val liveDvrCapable: Boolean = false,
+    val livePartialReviewRequired: Boolean = false,
 )
 
 internal object AndroidMediaUiWire {
@@ -135,6 +148,8 @@ internal object AndroidMediaUiWire {
         requestId = payload.optString("client_request_id"),
         action = payload.optString("action"),
         ok = payload.optBoolean("ok", false),
+        nextPollAfterMs = payload.optLong("next_poll_after_ms", 3_000L),
+        allTracksEnded = payload.optBoolean("all_tracks_ended", false),
         status = payload.nullableString("status"),
         captureId = payload.nullableString("capture_id"),
         outputPath = payload.nullableString("output_path"),
@@ -143,6 +158,15 @@ internal object AndroidMediaUiWire {
         manifestGraph = payload.optJSONObject("manifest_graph")?.let(ManifestGraphV1Contract::decode),
         manifestRevision = payload.optString("manifest_revision").takeIf { Regex("[0-9a-f]{64}").matches(it) },
         manifestSelectionPlan = payload.optJSONObject("manifest_selection_plan")?.let(ManifestSelectionV1Contract::decode),
+        recoveryFragments = payload.optInt("recovery_fragments", 0).coerceIn(0, 4096),
+        liveDurableFragments = payload.optInt("durable_fragments", 0).coerceIn(0, 4096),
+        liveDurableBytes = payload.optLong("durable_bytes", 0L).coerceAtLeast(0L),
+        liveDvrCapable = payload.optBoolean("dvr_capable", false),
+        livePartialReviewRequired = payload.optBoolean("partial_review_required", false),
+        cleanupPending = payload.optBoolean("cleanup_pending", false),
+        liveManifestUrl = payload.nullableString("manifest_url"),
+        videoRepresentationId = payload.nullableString("video_representation_id"),
+        audioRepresentationId = payload.nullableString("audio_representation_id"),
     )
 
     fun captureJson(record: MediaCaptureRecord): JSONObject = JSONObject()

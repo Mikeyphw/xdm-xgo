@@ -106,9 +106,13 @@ for key in ["licenseAsset", "sourceNoticeAsset"]:
         require((ROOT / aria_manifest[key]).is_file(), f"aria2 notice asset missing: {aria_manifest[key]}")
 require("sourceNoticeSha256" in aria_install and "assets/licenses/SOURCE-NOTICE.txt" in aria_verify, "aria2 notice is not attested and APK-verified")
 
-# S01-11: workflow path filters include build/release authority outside app/XDM.Android.
-for path in ["- '.devtool.toml'", "- 'build-release-apk.sh'"]:
-    require(workflow.count(path) >= 2, f"Android workflow path filter missing {path}")
+# S01-11 HF02: the active Android CI has release-tag pushes and explicitly
+# dispatched debug builds, not PR/path-filter triggers. Keep release signing
+# tag/opt-in-only, all manual diagnostic flags default-off, and the APK pair
+# dependent on the original validation job. The workflow itself is unchanged.
+from xar01_ci_trigger_policy import audit_android_triggers
+for reason in audit_android_triggers(workflow):
+    errors.append('Android workflow trigger policy drift: ' + reason)
 
 # S01-12: bundletool is self-provisioned at an immutable digest.
 require('VERSION = "1.18.3"' in bundletool and re.search(r'SHA256 = "[0-9a-f]{64}"', bundletool), "bundletool provisioner is not version+digest pinned")

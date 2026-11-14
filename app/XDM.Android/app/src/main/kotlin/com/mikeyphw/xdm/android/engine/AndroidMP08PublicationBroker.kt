@@ -52,9 +52,23 @@ internal class AndroidMP08PublicationBroker(
             !safeName.matches(destination) || request.has("path") || request.has("uri") ||
             request.has("headers") || request.has("argv") || request.has("url") ||
             request.has("body_base64")) return@withLock refused("mp08_publication_request_invalid")
-        val handoff = MediaRequestHandoffStore.forCapture(capture)
-        if (handoff == null || handoff.expiresAtEpochMs <= System.currentTimeMillis()) return@withLock refused("mp08_capture_authorization_missing")
         val captureHash = hex(capture.toByteArray())
+        val handoff = MediaRequestHandoffStore.forCapture(capture)
+        val browserAuthorized = handoff != null && handoff.expiresAtEpochMs > System.currentTimeMillis()
+        val liveCandidate = runCatching {
+            val receiptFile = File(verified, "$captureHash-$destination.receipt.json")
+            if (!receiptFile.isFile || Files.isSymbolicLink(receiptFile.toPath()) ||
+                !safeFile(receiptFile, verified) || receiptFile.length() > 16_384L) false else {
+                val receipt = JSONObject(receiptFile.readText(Charsets.UTF_8))
+                receipt.optString("source") in setOf("hls_live", "dash_live") &&
+                    receipt.optString("status") == "verified_app_private" &&
+                    receipt.optString("capture_hash") == captureHash &&
+                    receipt.optString("destination_key") == destination
+            }
+        }.getOrDefault(false)
+        // A browser token is only for NETWORK access. This path reads
+        // app-private, independently verified staged media, never a URL.
+        if (!browserAuthorized && !liveCandidate) return@withLock refused("mp08_capture_authorization_missing")
         try {
             when (request.optString("action")) {
                 "probe_staged" -> probeStaged(request, captureHash, destination)

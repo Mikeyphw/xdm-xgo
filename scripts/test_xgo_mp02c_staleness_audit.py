@@ -12,12 +12,28 @@ def get(path):
  return p.read_text(encoding='utf-8')
 class StalenessAudit(unittest.TestCase):
  def test_hls_body_fixture_no_longer_promotes_page_mime(self):
+  # HF06: positive corroborated HLS tests and untrusted-body refusals coexist.
+  # A historical negative substring assertion conflicted with HF05's actual
+  # privileged MIME + verified body regression. Assert *both* executable
+  # fixtures and the runtime evidence boundary instead of banning the label.
   t=get('app/XDM.Android/browser-extension/tests/test_background.js')
-  self.assertNotIn('verified HLS body promotes retained privileged evidence',t)
+  self.assertIn('verified HLS body promotes retained privileged evidence',t)
   self.assertIn('Untrusted HLS body cannot promote suffix-only HTTP response evidence',t)
+  self.assertIn('assert.strictEqual(chooser11.candidates.length, 0',t)
+  self.assertIn('assert.ok(chooser.candidates[0].variantCount >= 1 &&',t)
+  self.assertIn('chooser.candidates[0].segmentCount >= 25',t)
+  self.assertIn('!JSON.stringify(chooser.candidates).includes("sig=master-one")',t)
+  self.assertIn('events.sent.listeners[0]({ ...langRequest, requestHeaders:',t)
+  self.assertIn('assert.strictEqual(langCandidate.headers["accept-language"], "pt-BR,pt;q=0.8"',t)
+  self.assertIn('assert.strictEqual(langCandidate.browserHandoff.finalHeaders.kind, "FinalSent")',t)
+  self.assertIn('assert.notStrictEqual(langCandidate.headers.authorization, "Bearer proposed-only")',t)
   contract=get('scripts/test_xgo_mp02a_source_contract.py')
   self.assertNotIn('contentType: evidence.contentType || observation.contentType',contract)
   self.assertIn('analysis.manifestBody && CORE.isManifest',contract)
+  runtime=get('app/XDM.Android/browser-extension/src/main/extension/xdm-firefox/network-observer.js')
+  self.assertIn('analysis.manifestBody && CORE.isManifest("", evidence.contentType)',runtime)
+  self.assertIn('headers: authoritative ? proof.headers : {}',runtime)
+  self.assertIn('finalHeaders: authoritative ? proof.browserHandoff.finalHeaders : null',runtime)
  def test_other_existing_security_contracts_not_silently_removed(self):
   a=get('scripts/test_xgo_mp02b_source_contract.py')
   self.assertIn('candidateStore.clearFrame(details.tabId, committedFrame)',a)

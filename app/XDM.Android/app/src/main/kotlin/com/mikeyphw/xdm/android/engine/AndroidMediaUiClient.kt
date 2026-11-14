@@ -77,6 +77,29 @@ class AndroidMediaUiClient(private val context: Context) {
         return submit("android.media.execute", requestId, "execute", AndroidMediaUiWire.executePayload(requestId, captureId))
     }
 
+    /** Read-only recovery review or explicit orphan cleanup, never auto-resume. */
+    suspend fun liveAction(captureId: String, action: String): AndroidMediaUiCommandResult {
+        require(action in setOf("inspect_recovery", "discard_recovery", "inspect_active"))
+        val requestId = "media-${UUID.randomUUID()}"
+        return submit("android.media.live", requestId, "live", org.json.JSONObject()
+            .put("client_request_id", requestId).put("capture_id", captureId)
+            .put("action", action))
+    }
+
+    /** One-shot Go mapping of fresh DASH MP03 IDs to native MPD representation IDs.
+     * Signed root URL remains transient and is never stored by this client. */
+    suspend fun liveBindDash(
+        captureId: String, expectedRevision: String, videoOptionId: String, audioOptionId: String,
+    ): AndroidMediaUiCommandResult {
+        require(Regex("[0-9a-f]{64}").matches(expectedRevision))
+        require(videoOptionId.isNotBlank() && audioOptionId.isNotBlank())
+        val requestId = "media-${UUID.randomUUID()}"
+        return submit("android.media.live", requestId, "live", org.json.JSONObject()
+            .put("client_request_id", requestId).put("capture_id", captureId)
+            .put("action", "bind_dash").put("expected_revision", expectedRevision)
+            .put("video_option_id", videoOptionId).put("audio_option_id", audioOptionId))
+    }
+
     /** Read-only Go HLS/DASH discovery; the existing Kotlin executor remains authoritative. */
     suspend fun resolveManifest(
         captureId: String,

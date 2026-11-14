@@ -1,0 +1,618 @@
+package runtime
+
+// MP09 consolidated: typed Go-owned recording commands. All network bytes
+// are fetched by Android's previously paired, scope-checking platform broker;
+// the Go engine owns fragment identity, timing, durable proof and publication.
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"net/url"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/subhra74/xdm/engine/media"
+	"github.com/subhra74/xdm/engine/runtime/command"
+	"github.com/subhra74/xdm/engine/runtime/platform"
+)
+
+const AndroidMediaLiveKind = "android.media.live"
+
+var errMP09Android = errors.New("MP09 live controller refused")
+
+type mp09LiveCommand struct {
+	ClientRequestID       string `json:"client_request_id"`
+	CaptureID             string `json:"capture_id"`
+	Action                string `json:"action"`
+	VideoURL              string `json:"video_url"`
+	AudioURL              string `json:"audio_url"`
+	VideoRepresentationID string `json:"video_representation_id"`
+	AudioRepresentationID string `json:"audio_representation_id"`
+	Protocol              string `json:"protocol"`
+	RequireAudio          bool   `json:"require_audio"`
+	DVRCapable            bool   `json:"dvr_capable"`
+	UserLimitMS           int64  `json:"user_limit_ms"`
+	UserLimitBytes        int64  `json:"user_limit_bytes"`
+	DestinationKey        string `json:"destination_key"`
+	VideoOptionID        string `json:"video_option_id"`
+	AudioOptionID        string `json:"audio_option_id"`
+	ExpectedRevision     string `json:"expected_revision"`
+	RefreshedRootURL      string `json:"refreshed_root_url"`
+	RefreshedVideoURL     string `json:"refreshed_video_url"`
+	RefreshedAudioURL     string `json:"refreshed_audio_url"`
+	RefreshApproved       bool   `json:"refresh_approved"`
+	RefreshGeneration     uint64 `json:"refresh_generation"`
+}
+
+type mp09AndroidRecording struct {
+	root      string
+	dvrCapable bool // process-only user-selected DVR authority; never persisted or inferred
+	ctrl      *media.MP09Recording
+	session   *media.LiveSession
+	video     *mp09AndroidStore
+	audio     *mp09AndroidStore
+	videoPoll *media.LivePollEngine
+	audioPoll *media.LivePollEngine
+}
+
+type mp09AndroidState struct {
+	mu      sync.Mutex
+	entries map[string]*mp09AndroidRecording
+}
+
+type mp09AndroidFetcher struct {
+	inv           *Invocation
+	capture, root string
+}
+
+func (f *mp09AndroidFetcher) fetch(ctx context.Context, urlValue string, kind string, rng *media.ByteRange) ([]byte, error) {
+	if f == nil || f.inv == nil || ctx == nil {
+		return nil, errMP09Android
+	}
+	uri, e := url.Parse(urlValue)
+	if e != nil || uri.Host == "" || uri.User != nil || uri.Fragment != "" || uri.Scheme != "https" && uri.Scheme != "http" {
+		return nil, errMP09Android
+	}
+	root, e := url.Parse(f.root)
+	if e != nil || !strings.EqualFold(uri.Host, root.Host) || uri.Scheme != root.Scheme {
+		return nil, errMP09Android
+	}
+	payload := map[string]any{"capture_id": f.capture, "root_url": f.root, "requested_url": urlValue,
+		"parent_url": f.root, "may_replay_credentials": true, "max_response_bytes": 2 << 20, "mp09_media_kind": kind}
+	if rng != nil {
+		if rng.Offset < 0 || rng.Length <= 0 || rng.Length > 2<<20 {
+			return nil, errMP09Android
+		}
+		payload["range_offset"] = rng.Offset
+		payload["range_length"] = rng.Length
+	}
+	raw, _ := json.Marshal(payload)
+	reply, e := f.inv.PlatformRequest(ctx, platform.ManifestFetch, platform.Refs{}, raw)
+    if e != nil { return nil, errMP09Android }
+    if !reply.OK {
+        // Only a bounded, allowlisted status survives the platform boundary.
+        // The untrusted body, URL and headers must never enter Go logs/events.
+        reason := reply.ErrorCode
+        var failure struct {
+            ErrorCode string `json:"error_code"`
+            RetryAfterSeconds int64 `json:"retry_after_seconds"`
+        }
+        if len(reply.Payload) > 0 && len(reply.Payload) <= 2048 &&
+            json.Unmarshal(reply.Payload, &failure) == nil && failure.ErrorCode != "" {
+            reason = failure.ErrorCode
+        }
+        return nil, media.MP10DecodeFetchFailure(reason, failure.RetryAfterSeconds)
+    }
+    // Some Android bridge versions encode denial in the payload while
+    // preserving transport-level reply.OK. Recognize ONLY explicit false.
+    if len(reply.Payload) > 0 && len(reply.Payload) <= 2048 {
+        var denial struct {
+            OK *bool `json:"ok"`
+            ErrorCode string `json:"error_code"`
+            RetryAfterSeconds int64 `json:"retry_after_seconds"`
+        }
+        if json.Unmarshal(reply.Payload, &denial) == nil && denial.OK != nil && !*denial.OK {
+            return nil, media.MP10DecodeFetchFailure(denial.ErrorCode, denial.RetryAfterSeconds)
+        }
+    }
+	decoded, e := decodeAndroidManifestFetch(reply.Payload)
+	if e != nil || len(decoded.Body) == 0 || len(decoded.Body) > 2<<20 {
+		return nil, errMP09Android
+	}
+	// The Android broker verifies each redirect. A drifted final authority is
+	// never consumed, even if it returned plausible segment bytes.
+	final, e := url.Parse(decoded.FinalURL)
+	if e != nil || final.Scheme != root.Scheme || !strings.EqualFold(final.Host, root.Host) {
+		return nil, errMP09Android
+	}
+	if rng != nil && int64(len(decoded.Body)) != rng.Length {
+		return nil, errMP09Android
+	}
+	return decoded.Body, nil
+}
+func (f *mp09AndroidFetcher) FetchHLS(ctx context.Context, req media.HLSFetchRequest) (media.HLSFetchResponse, error) {
+	b, e := f.fetch(ctx, req.URI, string(req.Kind), req.Range)
+	return media.HLSFetchResponse{Bytes: b}, e
+}
+func (f *mp09AndroidFetcher) FetchDASH(ctx context.Context, req media.DASHFetchRequest) (media.DASHFetchResponse, error) {
+	b, e := f.fetch(ctx, req.URI, string(req.Kind), req.Range)
+	return media.DASHFetchResponse{Bytes: b}, e
+}
+
+type mp09AndroidStore struct {
+	base    *mp09FragmentStoreAdapter
+	records map[string]media.FragmentRecord
+}
+
+func newMP09AndroidStore(inv *Invocation, captureID, role string) (*mp09AndroidStore, error) {
+	raw, e := newMP09FragmentStoreAdapter(inv, captureID)
+	if e != nil {
+		return nil, e
+	}
+	store := raw.(*mp09FragmentStoreAdapter)
+	store.roleHint = role
+	return &mp09AndroidStore{base: store, records: make(map[string]media.FragmentRecord)}, nil
+}
+func (s *mp09AndroidStore) use(inv *Invocation) { s.base.inv = inv }
+
+// Existing fragments from a process-dead session cannot be mistaken for a
+// fresh recording start. Reauthorization and source-fingerprint reconciliation
+// must be explicitly qualified before restoring such fragments in-place.
+func (s *mp09AndroidStore) preflightNoUnboundJournal(ctx context.Context) error {
+	raw, _ := json.Marshal(map[string]any{
+		"action": "inventory", "capture_id": s.base.captureID, "track_role": "all", "mp09_live": true,
+	})
+	reply, err := s.base.inv.PlatformRequest(ctx, platform.AndroidFragmentStore, platform.Refs{}, raw)
+	if err != nil || !reply.OK || len(reply.Payload) > 512<<10 {
+		return media.ErrFragmentDurability
+	}
+	var inventory struct {
+		Records []json.RawMessage `json:"records"`
+        UnboundFragments int `json:"unbound_fragments"`
+	}
+	if json.Unmarshal(reply.Payload, &inventory) != nil ||
+        len(inventory.Records) > 0 || inventory.UnboundFragments != 0 {
+		return media.ErrFragmentDurability
+	}
+	return nil
+}
+
+func (s *mp09AndroidStore) WriteAndCommitFragment(ctx context.Context, r media.FragmentRecord, b []byte) (media.FragmentRecord, error) {
+	out, e := s.base.WriteAndCommitFragment(ctx, r, b)
+	if e == nil {
+		s.records[out.ID] = out
+	}
+	return out, e
+}
+func (s *mp09AndroidStore) VerifyCommitted(r media.FragmentRecord) error {
+	return s.base.VerifyCommitted(r)
+}
+func (s *mp09AndroidStore) CommittedRecords() []media.FragmentRecord {
+	list := make([]media.FragmentRecord, 0, len(s.records))
+	for _, r := range s.records {
+		list = append(list, r)
+	}
+	return list
+}
+
+// Go's independent MP08 proof requires reading app-private staged bytes.
+// Android returns only requested, redacted, readback-verified 64-KiB chunks.
+func (s *mp09AndroidStore) ReadVerified(id media.FragmentIdentity) ([]byte, error) {
+	key, e := media.FragmentID(id)
+	if e != nil {
+		return nil, e
+	}
+	rec, ok := s.records[key]
+	if !ok || rec.ExpectedLength <= 0 || rec.ExpectedLength > 2<<20 {
+		return nil, media.ErrFragmentDurability
+	}
+	if e := s.VerifyCommitted(rec); e != nil {
+		return nil, e
+	}
+	out := make([]byte, 0, int(rec.ExpectedLength))
+	for offset := int64(0); offset < rec.ExpectedLength; {
+		chunk := int64(64 << 10)
+		if rem := rec.ExpectedLength - offset; rem < chunk {
+			chunk = rem
+		}
+		raw, _ := json.Marshal(map[string]any{"action": "read_chunk", "capture_id": s.base.captureID,
+			"fragment_id": key, "generation": rec.AttemptGeneration, "hash": rec.Hash,
+			"expected_length": rec.ExpectedLength, "offset": offset, "length": chunk, "mp09_live": true})
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+		reply, ee := s.base.inv.PlatformRequest(ctx, platform.AndroidFragmentStore, platform.Refs{}, raw)
+		cancel()
+		if ee != nil || !reply.OK || len(reply.Payload) > 128<<10 {
+			return nil, media.ErrFragmentDurability
+		}
+		var got struct {
+			Body   string `json:"body_base64"`
+			Length int64  `json:"length"`
+		}
+		if json.Unmarshal(reply.Payload, &got) != nil || got.Length != chunk {
+			return nil, media.ErrFragmentDurability
+		}
+		bytes, ee := base64.StdEncoding.DecodeString(got.Body)
+		if ee != nil || int64(len(bytes)) != chunk {
+			return nil, media.ErrFragmentDurability
+		}
+		out = append(out, bytes...)
+		offset += chunk
+	}
+	sum := sha256.Sum256(out)
+	if "sha256:"+hex.EncodeToString(sum[:]) != rec.Hash {
+		return nil, media.ErrFragmentDurability
+	}
+	return out, nil
+}
+
+func (e *Engine) androidMediaLiveHandler(ctx context.Context, inv *Invocation, env command.Envelope) error {
+	var req mp09LiveCommand
+	if json.Unmarshal(env.Payload, &req) != nil || req.ClientRequestID == "" || len(req.ClientRequestID) > 128 ||
+		req.CaptureID == "" || len(req.CaptureID) > 256 {
+		return errMP09Android
+	}
+	failed := func(code string) error {
+		_ = emitAndroidMediaResult(inv, req.ClientRequestID, "live", false, map[string]any{
+			"capture_id": req.CaptureID, "error_code": code, "status": "refused"})
+		return errMP09Android
+	}
+	e.mu.Lock()
+	if e.liveRecording == nil {
+		e.liveRecording = &mp09AndroidState{entries: map[string]*mp09AndroidRecording{}}
+	}
+	state := e.liveRecording
+	e.mu.Unlock()
+	state.mu.Lock()
+	defer state.mu.Unlock()
+	now := time.Now().UTC()
+	active := state.entries[req.CaptureID]
+	var status media.MP09RecordingStatus
+	var err error
+	switch req.Action {
+    case "inspect_active":
+        // UI-only, read-only snapshot. Never expose URLs, fragments, paths,
+        // credential references, or a false DownloadReady/Published claim.
+        if active == nil {
+            return emitAndroidMediaResult(inv, req.ClientRequestID, "live", true,
+                map[string]any{"capture_id":req.CaptureID,"status":"not_active",
+                    "download_ready":false,"published":false})
+        }
+        live, readErr := active.ctrl.SnapshotForMP09()
+        if readErr != nil { return failed("active_status_unavailable") }
+        label := string(live.State)
+        if live.RefreshRequired { label = "refresh_required" }
+        return emitAndroidMediaResult(inv, req.ClientRequestID, "live", true,
+            map[string]any{"capture_id":req.CaptureID,"status":label,
+                "durable_fragments":live.DurableFragments,"durable_bytes":live.DurableBytes,
+                "partial_review_required":live.PartialReviewRequired,
+                "all_tracks_ended":live.AllTracksEnded,"dvr_capable":active.dvrCapable,
+                "download_ready":false,"published":false})
+    case "bind_dash":
+        // The original MP03 option IDs are hashes, NOT DASH representation IDs.
+        // Re-fetch using Android's paired scope before translating them.
+        binding, revision, bindErr := e.mp09BindDASH(ctx, inv, req)
+        if bindErr != nil { return failed("dash_binding_not_verified") }
+        return emitAndroidMediaResult(inv, req.ClientRequestID, "live", true,
+            map[string]any{"capture_id":req.CaptureID,"status":"dash_bound_unverified",
+                "manifest_revision":revision,"manifest_url":binding.ManifestURL,
+                "video_representation_id":binding.VideoRepresentationID,
+                "audio_representation_id":binding.AudioRepresentationID,"download_ready":false})
+    case "inspect_recovery":
+        // Read-only review after process death. No network fetch, and no
+        // credential, fragment ID, file path or URL returned to the UI.
+        if _, scopeErr := e.androidMedia.manifestRoot(req.CaptureID); scopeErr != nil {
+            return failed("capture_not_registered")
+        }
+        if active != nil {
+            return emitAndroidMediaResult(inv, req.ClientRequestID, "live", true,
+                map[string]any{"capture_id": req.CaptureID, "status": "recording_active", "recovery_fragments": 0, "download_ready": false})
+        }
+        raw, _ := json.Marshal(map[string]any{"action": "inventory", "capture_id": req.CaptureID,
+            "track_role": "all", "mp09_live": true})
+        reply, reviewErr := inv.PlatformRequest(ctx, platform.AndroidFragmentStore, platform.Refs{}, raw)
+        if reviewErr != nil || !reply.OK { return failed("recovery_inventory_unavailable") }
+        n, reviewErr := mp09ReviewRecoveryInventory(reply.Payload)
+        if reviewErr != nil { return failed("recovery_integrity_refused") }
+        var orphan struct { Unbound int `json:"unbound_fragments"` }
+        if json.Unmarshal(reply.Payload,&orphan) != nil || orphan.Unbound < 0 || orphan.Unbound > 4096-n {
+            return failed("recovery_unbound_inventory_invalid")
+        }
+        n += orphan.Unbound
+        phase, phaseErr := mp09InspectSession(ctx, inv, req.CaptureID)
+        if phaseErr != nil {return failed("recovery_session_phase_unverified")}
+        if phase == "published_clean" {
+            if n != 0 {return failed("published_cleanup_receipt_conflicts_with_fragments")}
+            return emitAndroidMediaResult(inv, req.ClientRequestID, "live", true,
+                map[string]any{"capture_id":req.CaptureID,"status":"published_cleanup_verified",
+                    "recovery_fragments":0,"download_ready":false})
+        }
+        if phase == "published" {return emitAndroidMediaResult(inv, req.ClientRequestID, "live", true,
+            map[string]any{"capture_id": req.CaptureID, "status":"published_cleanup_pending", "recovery_fragments":n, "download_ready": false})}
+        if phase == "publishing" {return emitAndroidMediaResult(inv, req.ClientRequestID, "live", true,
+            map[string]any{"capture_id": req.CaptureID, "status":"publication_pending_review", "recovery_fragments":n, "download_ready": false})}
+        if phase == "recording" && n == 0 {return emitAndroidMediaResult(inv, req.ClientRequestID, "live", true,
+            map[string]any{"capture_id": req.CaptureID, "status":"empty_session_review_required",
+                "recovery_fragments":0,"download_ready":false})}
+        if phase == "missing" && n > 0 {return emitAndroidMediaResult(inv, req.ClientRequestID, "live", true,
+            map[string]any{"capture_id": req.CaptureID, "status":"journal_missing_review_required", "recovery_fragments":n, "download_ready":false})}
+        if phase != "recording" && phase != "missing" {return failed("recovery_phase_invalid")}
+        statusValue := "no_recovery"
+        if n > 0 { statusValue = "recovery_review_required" }
+        return emitAndroidMediaResult(inv, req.ClientRequestID, "live", true,
+            map[string]any{"capture_id": req.CaptureID, "status": statusValue,
+                "recovery_fragments": n, "download_ready": false})
+    case "discard_recovery":
+        // Only a separately confirmed UI action can discard orphan fragments.
+        // Never allow this route to cancel an active recording.
+        if active != nil { return failed("active_recording_discard_denied") }
+        if _, scopeErr := e.androidMedia.manifestRoot(req.CaptureID); scopeErr != nil {
+            return failed("capture_not_registered")
+        }
+        cleaner := &mp09AndroidCleaner{inv: inv, capture: req.CaptureID}
+        if cleanErr := cleaner.DiscardAndVerify(ctx, nil); cleanErr != nil {
+            return failed("recovery_cleanup_not_confirmed")
+        }
+        return emitAndroidMediaResult(inv, req.ClientRequestID, "live", true,
+            map[string]any{"capture_id": req.CaptureID, "status": "discarded_verified",
+                "recovery_fragments": 0, "download_ready": false})
+    case "start", "resume_interrupted":
+        recovering := req.Action == "resume_interrupted"
+		if active != nil {
+			return failed("already_recording")
+		}
+		if req.UserLimitMS < 0 || req.UserLimitBytes < 0 {
+			return failed("invalid_explicit_limit")
+		}
+		root, ee := e.androidMedia.manifestRoot(req.CaptureID)
+		if ee != nil {
+			return failed("capture_not_authorized")
+		}
+		parsedRoot, ee := url.Parse(root)
+		if ee != nil || parsedRoot.Host == "" {
+			return failed("capture_scope_invalid")
+		}
+		if req.Protocol != "hls" && req.Protocol != "dash" {
+			return failed("protocol_invalid")
+		}
+		protocol := media.FragmentProtocol(req.Protocol)
+        if !req.RequireAudio || req.VideoURL == "" || req.AudioURL == "" {return failed("explicit_separate_audio_required")}
+        if req.Protocol == "dash" {
+            // A service Intent is not authority: independently re-check the
+            // exact source revision and raw MPD representation IDs in Go.
+            b, _, bindErr := e.mp09BindDASH(ctx, inv, req)
+            if bindErr != nil || req.VideoURL != root || req.AudioURL != root ||
+                b.VideoRepresentationID != req.VideoRepresentationID ||
+                b.AudioRepresentationID != req.AudioRepresentationID {
+                return failed("dash_selection_changed_refresh_required")
+            }
+        } else if req.VideoRepresentationID != "" || req.AudioRepresentationID != "" {
+            return failed("hls_representation_id_not_allowed")
+        }
+		if req.UserLimitMS > int64((24*time.Hour)/time.Millisecond)*365 {
+			return failed("user_duration_overflow")
+		}
+		sidHash := sha256.Sum256([]byte(req.CaptureID))
+		sessionID := "live_" + hex.EncodeToString(sidHash[:12])
+        startedAt := now
+        var recoverySession mp09StoredSession
+        if recovering {
+            meta, readErr := mp09ReadSession(ctx, inv, req.CaptureID, root, req, now)
+            if readErr != nil {return failed("resume_requires_original_source_and_authorization")}
+            recoverySession = meta
+            startedAt = time.UnixMilli(meta.StartedMS)
+        }
+        session, ee := media.NewLiveSession(sessionID, 1, startedAt, media.LiveSessionPolicy{
+            SourceDVRCapable: req.DVRCapable, IdleTimeout: 15 * time.Second, PollTimeout: 20 * time.Second,
+            UserMaxDuration: time.Duration(req.UserLimitMS) * time.Millisecond, UserMaxDurableBytes: req.UserLimitBytes})
+		if ee != nil {
+			return failed("session_invalid")
+		}
+		fetcher := &mp09AndroidFetcher{inv: inv, capture: req.CaptureID, root: root}
+		build := func(role, uri, rep string) (*mp09AndroidStore, *media.LivePollEngine, error) {
+			store, x := newMP09AndroidStore(inv, req.CaptureID, role)
+			if x != nil {
+				return nil, nil, x
+			}
+            if recovering {
+                x = store.mp09RestoreVerified(ctx, role, 1)
+            } else {
+                x = store.preflightNoUnboundJournal(ctx)
+            }
+            if x != nil {return nil, nil, x}
+			spec := media.LivePollSpec{Protocol: protocol, ManifestURL: uri, DASHRepresentationID: rep}
+			poll, x := media.NewLivePollEngine(session, store, fetcher, fetcher, spec)
+			return store, poll, x
+		}
+		if req.VideoURL == "" {
+			return failed("video_selection_missing")
+		}
+		video, vpoll, ee := build("video", req.VideoURL, req.VideoRepresentationID)
+		if ee != nil {
+			return failed("video_selection_refused")
+		}
+		var audio *mp09AndroidStore
+		var apoll *media.LivePollEngine
+		bindings := []media.MP09TrackBinding{{Role: "video", Poll: vpoll, Store: video}}
+		if req.AudioURL != "" {
+			audio, apoll, ee = build("audio", req.AudioURL, req.AudioRepresentationID)
+			if ee != nil {
+				return failed("audio_selection_refused")
+			}
+			bindings = append(bindings, media.MP09TrackBinding{Role: "audio", Poll: apoll, Store: audio})
+		} else if req.RequireAudio {
+			return failed("required_audio_missing")
+		}
+        if recovering {
+            // MP10 P03: re-read the sealed session and entire capture-owned
+            // inventory BEFORE recovery, with fresh MP05 readback proofs.
+            // No token, URL, fragment path or digest may enter public errors.
+            priorRecoveryFence, fenceErr := mp10FenceInterruptedRecording(ctx, inv,
+                req.CaptureID, root, req, recoverySession, now, video, audio)
+            if fenceErr != nil { return failed("recovery_inventory_preflight_failed") }
+            // Every inventoried fragment is independently rehashed and
+            // reattached before any new poll or publication is permitted.
+            if ee = mp09Rehydrate(session, now, video, audio, vpoll, apoll); ee != nil {
+                return failed("recovery_fragment_or_timeline_invalid")
+            }
+            // A second journal+disk barrier detects disappearance, role mixup
+            // or phase changes during hydration; never auto-delete evidence.
+            confirmedRecoveryFence, fenceErr := mp10FenceInterruptedRecording(ctx, inv,
+                req.CaptureID, root, req, recoverySession, now, video, audio)
+            if fenceErr != nil || !mp10SameRecoveryFence(priorRecoveryFence, confirmedRecoveryFence) {
+                return failed("recovery_inventory_changed_during_rehydrate")
+            }
+        } else if ee = mp09BeginSession(ctx, inv, req.CaptureID, root, req, now); ee != nil {
+            return failed("durable_session_begin_failed")
+        }
+		controller, ee := media.NewMP09Recording(session, req.RequireAudio, bindings...)
+		if ee != nil {
+			return failed("track_binding_refused")
+		}
+		active = &mp09AndroidRecording{root: root, dvrCapable: req.DVRCapable, ctrl: controller, session: session, video: video,
+			audio: audio, videoPoll: vpoll, audioPoll: apoll}
+		state.entries[req.CaptureID] = active
+		status, err = active.ctrl.PollDue(ctx, now)
+		if err != nil && !errors.Is(err, media.ErrLivePollFetch) && !errors.Is(err, media.ErrLivePollIncomplete) {
+			// Invalid first attempts cannot leave a phantom active session.
+			delete(state.entries, req.CaptureID)
+		}
+	case "refresh_authorized":
+        // A private UI action must have confirmed a fresh capture handoff.
+        // Android's ManifestFetch broker independently verifies that its
+        // encrypted current capture URL matches this renewed root exactly;
+        // replacing a signed token in an Intent grants no new authority.
+        if active == nil || !req.RefreshApproved || req.RefreshGeneration == 0 ||
+            req.RefreshedRootURL == "" || req.RefreshedVideoURL == "" ||
+            (active.audio != nil && req.RefreshedAudioURL == "") {
+            return failed("refresh_authorization_or_binding_missing")
+        }
+        fresh := &mp09AndroidFetcher{inv: inv, capture: req.CaptureID, root: req.RefreshedRootURL}
+        active.video.use(inv)
+        candidates := []media.MP10RefreshCandidate{{Role:"video", ManifestURL:req.RefreshedVideoURL, HLS:fresh, DASH:fresh}}
+        if active.audio != nil {
+            active.audio.use(inv)
+            candidates = append(candidates, media.MP10RefreshCandidate{Role:"audio", ManifestURL:req.RefreshedAudioURL, HLS:fresh, DASH:fresh})
+        }
+        if authErr := active.ctrl.MP10Reauthorize(ctx,now,req.RefreshApproved,active.root,
+            req.RefreshedRootURL,req.RefreshGeneration,candidates...); authErr != nil {
+            // Incompatible source/timeline stays quarantined. No journal
+            // deletion, no changed generation, and no fake publication.
+            return failed("refresh_identity_or_durable_overlap_not_proven")
+        }
+        active.root = req.RefreshedRootURL
+        status,err = active.ctrl.PollDue(ctx,now)
+	case "poll":
+		if active == nil {
+			return failed("session_not_found_recover_authorization")
+		}
+		fetcher := &mp09AndroidFetcher{inv: inv, capture: req.CaptureID, root: active.root}
+		active.video.use(inv)
+		active.videoPoll.BindForMP09(fetcher, fetcher)
+		if active.audio != nil {
+			active.audio.use(inv)
+			active.audioPoll.BindForMP09(fetcher, fetcher)
+		}
+		status, err = active.ctrl.PollDue(ctx, now)
+	case "pause":
+		if active == nil {
+			return failed("session_not_found")
+		}
+		err = active.ctrl.Pause(now)
+	case "resume":
+		if active == nil {
+			return failed("session_not_found")
+		}
+		err = active.ctrl.Resume(now)
+	case "stop_save":
+		if active == nil {
+			return failed("session_not_found")
+		}
+		status, err = active.ctrl.Stop(now)
+		if err == nil {
+			host, ee := newAndroidMP08Host(inv, req.CaptureID)
+			if ee != nil {
+				return failed("mp08_host_unavailable")
+			}
+			// Stop time is an observed clip lifetime. FFprobe independently verifies
+			// bounded output against media duration and never accepts a phantom file.
+			duration := now.Sub(active.session.StartedAtForMP09())
+			if duration < time.Second {
+				return failed("recording_too_short")
+			}
+			if phaseErr := mp09SetSessionPhase(ctx, inv, req.CaptureID, "publishing"); phaseErr != nil {
+                return failed("publication_phase_not_durable")
+            }
+            result, finalErr := active.ctrl.Finalize(ctx, req.DestinationKey, duration, host)
+			if finalErr != nil || !result.DownloadReady {
+				return failed("mp08_verify_or_publication_failed")
+			}
+            // Once MP08 verifies the published bytes, clean transient parts.
+            // A failed cleanup stays reviewable but cannot undo publication.
+            phaseErr := mp09SetSessionPhase(ctx, inv, req.CaptureID, "published")
+            cleanupPending := phaseErr != nil
+            // A failed published-phase write must preserve local evidence;
+            // returning completed still reflects MP08's verified publication.
+            if !cleanupPending {
+                cleanupPending = (&mp09AndroidCleaner{inv: inv, capture: req.CaptureID}).DiscardAndVerify(ctx, nil) != nil
+            }
+            if !cleanupPending { _ = mp09FinishSession(ctx, inv, req.CaptureID) }
+			delete(state.entries, req.CaptureID)
+			return emitAndroidMediaResult(inv, req.ClientRequestID, "live", true, map[string]any{
+                "capture_id": req.CaptureID, "status": "completed", "publication_id": result.PublicationID,
+                "output_uri": result.OutputURI, "download_ready": true, "cleanup_pending": cleanupPending})
+		}
+	case "cancel_discard":
+		if active == nil {
+			return failed("session_not_found")
+		}
+		cleaner := &mp09AndroidCleaner{inv: inv, capture: req.CaptureID}
+		status, err = active.ctrl.Cancel(ctx, now, cleaner)
+		if err == nil {
+			delete(state.entries, req.CaptureID)
+		}
+	default:
+		return failed("unsupported_action")
+	}
+	if err != nil && !errors.Is(err, media.ErrLivePollFetch) && !errors.Is(err, media.ErrLivePollIncomplete) {
+		return failed("recording_state_or_durability_refused")
+	}
+	if req.Action == "pause" || req.Action == "resume" {
+		status, _ = active.ctrl.SnapshotForMP09()
+	}
+	stateName := string(status.State)
+    if status.RefreshRequired { stateName = "refresh_required" }
+	if stateName == "" {
+		snap, _ := active.session.Snapshot()
+		stateName = string(snap.State)
+	}
+	return emitAndroidMediaResult(inv, req.ClientRequestID, "live", true, map[string]any{
+		"capture_id": req.CaptureID, "status": stateName, "next_poll_after_ms": int64(status.NextPollAfter / time.Millisecond),
+		"durable_fragments": status.DurableFragments, "durable_bytes": status.DurableBytes,
+		"partial_review_required": status.PartialReviewRequired, "all_tracks_ended": status.AllTracksEnded,
+        "refresh_required": status.RefreshRequired, "download_ready": false})
+}
+
+type mp09AndroidCleaner struct {
+	inv     *Invocation
+	capture string
+}
+
+func (c *mp09AndroidCleaner) DiscardAndVerify(ctx context.Context, records []media.FragmentRecord) error {
+	raw, _ := json.Marshal(map[string]any{"action": "discard_capture", "capture_id": c.capture, "mp09_live": true})
+	result, e := c.inv.PlatformRequest(ctx, platform.AndroidFragmentStore, platform.Refs{}, raw)
+	if e != nil || !result.OK {
+		return media.ErrMP09Cleanup
+	}
+	var receipt struct {
+		Status    string `json:"status"`
+		Remaining int    `json:"remaining"`
+	}
+	if json.Unmarshal(result.Payload, &receipt) != nil || receipt.Status != "discarded_verified" || receipt.Remaining != 0 {
+		return media.ErrMP09Cleanup
+	}
+	return nil
+}

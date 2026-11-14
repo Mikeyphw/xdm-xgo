@@ -52,6 +52,7 @@ type LivePollReceipt struct {
 	TotalDurableFragments int              `json:"total_durable_fragments"`
 	TotalDurableBytes     int64            `json:"total_durable_bytes"`
 	SourceEnded           bool             `json:"source_ended"`
+	RefreshRequired       bool             `json:"refresh_required"`
 	GapOrPartial          bool             `json:"gap_or_partial"`
 	NextPollAfter         time.Duration    `json:"next_poll_after"`
 	DownloadReady         bool             `json:"download_ready"`
@@ -68,6 +69,7 @@ type LivePollEngine struct {
 	lastHLSSeq int64
 	seenHLS    bool
 	lastDASH   map[string]int64
+	refreshRequired bool
 }
 
 func NewLivePollEngine(session *LiveSession, store LivePollStore, hls HLSFetcher, dash DASHFetcher, spec LivePollSpec) (*LivePollEngine, error) {
@@ -100,6 +102,40 @@ func NewLivePollEngine(session *LiveSession, store LivePollStore, hls HLSFetcher
 	return &LivePollEngine{session: session, store: store, hls: hls, dash: dash, spec: spec, lastDASH: make(map[string]int64)}, nil
 }
 
+// Each tracker is scoped to one executor observation and never persists its
+// transport error, URL, token or headers. Only enum-classified failures escape.
+type mp10HLSFailureTracker struct { source HLSFetcher; failure *MP10FetchFailure }
+func (f *mp10HLSFailureTracker) FetchHLS(ctx context.Context, req HLSFetchRequest) (HLSFetchResponse, error) {
+    // Once authorization has expired or a server has requested a cooldown,
+    // do not issue more child requests for the rest of this same poll.
+    if f.failure != nil && (f.failure.RefreshRequired() || f.failure.RetryAfter > 0) {
+        return HLSFetchResponse{}, f.failure
+    }
+    r, err := f.source.FetchHLS(ctx, req)
+    var observed *MP10FetchFailure
+    if errors.As(err, &observed) { f.failure = mp10PreferFetchFailure(f.failure, observed) }
+    return r, err
+}
+type mp10DASHFailureTracker struct { source DASHFetcher; failure *MP10FetchFailure }
+func (f *mp10DASHFailureTracker) FetchDASH(ctx context.Context, req DASHFetchRequest) (DASHFetchResponse, error) {
+    if f.failure != nil && (f.failure.RefreshRequired() || f.failure.RetryAfter > 0) {
+        return DASHFetchResponse{}, f.failure
+    }
+    r, err := f.source.FetchDASH(ctx, req)
+    var observed *MP10FetchFailure
+    if errors.As(err, &observed) { f.failure = mp10PreferFetchFailure(f.failure, observed) }
+    return r, err
+}
+func (e *LivePollEngine) observeMP10Failure(f *MP10FetchFailure) {
+    if f != nil && f.RefreshRequired() { e.refreshRequired = true }
+}
+// RefreshRequiredForMP10 reports only authorization state, never a public URL.
+func (e *LivePollEngine) RefreshRequiredForMP10() bool {
+    if e == nil { return false }
+    e.mu.Lock(); defer e.mu.Unlock()
+    return e.refreshRequired
+}
+
 func livePollInterval(d time.Duration) time.Duration {
 	if d <= 0 {
 		return 3 * time.Second
@@ -121,7 +157,7 @@ func (e *LivePollEngine) safeReceipt(sourceEnded bool, observed, newFragments in
 	return LivePollReceipt{SchemaVersion: 1, Protocol: e.spec.Protocol, State: snapshot.State,
 		ObservedFragments: observed, NewDurableFragments: newFragments,
 		TotalDurableFragments: snapshot.DurableFragments, TotalDurableBytes: snapshot.DurableBytes,
-		SourceEnded: sourceEnded, GapOrPartial: snapshot.HasGaps || snapshot.PartialReviewRequired,
+		SourceEnded: sourceEnded, RefreshRequired: e.refreshRequired, GapOrPartial: snapshot.HasGaps || snapshot.PartialReviewRequired,
 		NextPollAfter: livePollInterval(after), DownloadReady: false, Published: false}, nil
 }
 
@@ -142,6 +178,14 @@ func (e *LivePollEngine) Poll(ctx context.Context, now time.Time) (LivePollRecei
 	if snapshot.State != LiveSessionCapturing && snapshot.State != LiveSessionRecoverable {
 		return LivePollReceipt{}, ErrLiveSessionState
 	}
+	if e.refreshRequired {
+		// The paired Android authorization expired. Do not retry the same
+		// signed URL until a separately verified new authorization exists.
+		r, err := e.safeReceipt(false, 0, 0, 5*time.Minute)
+		if err != nil { return LivePollReceipt{}, err }
+		r.NextPollAfter = 5*time.Minute
+		return r, ErrLivePollFetch
+	}
 	requestCtx, cancel, err := e.session.PollContext(ctx)
 	if err != nil {
 		return LivePollReceipt{}, err
@@ -158,10 +202,18 @@ func (e *LivePollEngine) Poll(ctx context.Context, now time.Time) (LivePollRecei
 	}
 	cancel()
 	if err != nil {
-		_ = e.session.NetworkFailure(now)
-		r, _ := e.safeReceipt(false, 0, 0, 3*time.Second)
-		return r, ErrLivePollFetch
-	}
+        var failure *MP10FetchFailure
+        if errors.As(err, &failure) && failure.RefreshRequired() {
+            e.refreshRequired = true
+        }
+        _ = e.session.NetworkFailure(now)
+        r, _ := e.safeReceipt(false, 0, 0, 3*time.Second)
+        if e.refreshRequired { r.NextPollAfter = 5*time.Minute }
+        if failure != nil && failure.RetryAfter > r.NextPollAfter {
+            r.NextPollAfter = failure.RetryAfter
+        }
+        return r, ErrLivePollFetch
+    }
 	if len(body) == 0 || len(body) > e.spec.MaxManifestBytes {
 		return LivePollReceipt{}, ErrLivePollManifest
 	}
@@ -203,7 +255,8 @@ func (e *LivePollEngine) pollHLS(ctx context.Context, now time.Time, body string
 			}
 		}
 	}
-	exec, err := NewHLSExecutor(e.hls, nil)
+	tracked := &mp10HLSFailureTracker{source: e.hls}
+	exec, err := NewHLSExecutor(tracked, nil)
 	if err != nil {
 		return LivePollReceipt{}, ErrLivePollInvalid
 	}
@@ -211,6 +264,7 @@ func (e *LivePollEngine) pollHLS(ctx context.Context, now time.Time, body string
 		return LivePollReceipt{}, ErrLivePollIncomplete
 	}
 	res, execErr := exec.Execute(ctx, HLSExecutionPlan{BaseURL: e.spec.ManifestURL, Playlists: []string{body}, AttemptGeneration: e.session.generation, CredentialRef: e.spec.CredentialRef})
+    e.observeMP10Failure(tracked.failure)
 	observed := 0
 	// Read back the exact expected stream identities, never the executor's
 	// URL-bearing outcomes. Also rehydrates session state after restart.
@@ -239,6 +293,8 @@ func (e *LivePollEngine) pollHLS(ctx context.Context, now time.Time, body string
 			_ = e.session.NetworkFailure(now)
 		}
 		r, _ := e.safeReceipt(p.EndList, observed, res.Completed, time.Duration(p.TargetDuration*float64(time.Second))/2)
+        if e.refreshRequired { r.NextPollAfter = 5*time.Minute }
+        if tracked.failure != nil && tracked.failure.RetryAfter > r.NextPollAfter { r.NextPollAfter = tracked.failure.RetryAfter }
 		return r, ErrLivePollIncomplete
 	}
 	return e.safeReceipt(p.EndList, observed, res.Completed, time.Duration(p.TargetDuration*float64(time.Second))/2)
@@ -279,7 +335,8 @@ func (e *LivePollEngine) pollDASH(ctx context.Context, now time.Time, body strin
 			pendingLast[key] = f.Number
 		}
 	}
-	exec, err := NewDASHExecutor(e.dash, nil)
+	tracked := &mp10DASHFailureTracker{source: e.dash}
+	exec, err := NewDASHExecutor(tracked, nil)
 	if err != nil {
 		return LivePollReceipt{}, ErrLivePollInvalid
 	}
@@ -287,6 +344,7 @@ func (e *LivePollEngine) pollDASH(ctx context.Context, now time.Time, body strin
 		return LivePollReceipt{}, ErrLivePollIncomplete
 	}
 	res, execErr := exec.Execute(ctx, DASHExecutionPlan{BaseURL: e.spec.ManifestURL, Manifests: []string{body}, AttemptGeneration: e.session.generation, CredentialRef: e.spec.CredentialRef, RepresentationIDs: []string{e.spec.DASHRepresentationID}})
+    e.observeMP10Failure(tracked.failure)
 	observed := 0
 	for _, f := range selected {
 		rec, ok := exec.Ledger().Get(f.Identity)
@@ -305,6 +363,8 @@ func (e *LivePollEngine) pollDASH(ctx context.Context, now time.Time, body strin
 			_ = e.session.NetworkFailure(now)
 		}
 		r, _ := e.safeReceipt(p.Type == DASHStatic, observed, res.Completed, p.MinUpdatePeriod)
+        if e.refreshRequired { r.NextPollAfter = 5*time.Minute }
+        if tracked.failure != nil && tracked.failure.RetryAfter > r.NextPollAfter { r.NextPollAfter = tracked.failure.RetryAfter }
 		return r, ErrLivePollIncomplete
 	}
 	return e.safeReceipt(p.Type == DASHStatic, observed, res.Completed, p.MinUpdatePeriod)
