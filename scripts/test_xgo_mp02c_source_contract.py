@@ -77,11 +77,11 @@ class MP02CSecurityContract(unittest.TestCase):
                 self.assertEqual(sha(EXT/name),digest,name)
                 self.assertIn(f'"{name}": "{digest}"',XFE.read_text())
         self.assertIn('referenceSnapshotBeforeMp01Sha256',doc)
-        # Original historic digests must NEVER be recomputed or swapped to active assets.
-        original=subprocess.run(['git','show',f'{BASE}:docs/xgo/XGO_XPI_V161_REFERENCE_DIGESTS.json'],
-                                cwd=Path(os.environ.get('XGO_MP02C_ORIGINAL_ROOT') or ROOT),text=True,capture_output=True,check=True)
-        history=json.loads(original.stdout)
-        self.assertEqual(doc['referenceSnapshotBeforeMp01Sha256'],history['referenceSnapshotBeforeMp01Sha256'])
+        # Both full-history and shallow CI checkout modes verify the SAME
+        # immutable historical XPI reference; never promote active asset hashes.
+        from ci.xgo_historical_xpi_provenance import historical_reference
+        self.assertIn('HISTORICAL_', historical_reference(
+            doc, root=Path(os.environ.get('XGO_MP02C_ORIGINAL_ROOT') or ROOT)))
     def test_actual_ci_routing(self):
         policy=POLICY.read_text()
         android=ANDROID.read_text()
