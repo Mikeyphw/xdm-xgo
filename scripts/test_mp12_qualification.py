@@ -193,5 +193,18 @@ class GateTests(unittest.TestCase):
             self.assertEqual(p.returncode, 0,
                 'P06 HOSTED ROLLBACK RACE CHECK: '+p.stdout[-4000:])
 
+    def test_mp12_p07_physical_arm64_source_and_archive_adversarial_gate(self):
+        # P07 checks artifacts and read-only policy only; no device write in CI.
+        import subprocess
+        source = Path(__file__).with_name('mp12_p07_device_acceptance.py')
+        tests = Path(__file__).with_name('test_mp12_p07_device_acceptance.py')
+        self.assertTrue(source.is_file() and tests.is_file())
+        for argv in ((sys.executable, '-B', str(tests)),
+                     (sys.executable, '-B', str(source), 'source-only',
+                      '--repo', str(Path(__file__).resolve().parents[1]))):
+            result = subprocess.run(argv, stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT, text=True, timeout=120, check=False)
+            self.assertEqual(result.returncode, 0, result.stdout[-4000:])
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
