@@ -17,8 +17,8 @@ import subprocess
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 APP = ROOT / 'app/XDM.Android/app/build.gradle.kts'
 AUTHORITY = ROOT / 'app/XDM.Android/app/src/main/kotlin/com/mikeyphw/xdm/android/engine/AndroidEngineProcessAuthority.kt'
-AUTHORITY_BLOB = '659663b890fc4450e9534743ffc725e92179fe34'
-BASE_BLOB = '7040b8359d3b2a8f31e1a1ec5c7d53aaec6bcae2'
+AUTHORITY_BLOB = 'cf34d0cbafede9baa78c22d4973eafc6eb3bd496'
+BASE_BLOB = '517b34ec27ef0c57237a99b6671dcf9829eae334'
 PAIRS = [
     ('xgoRepositoryRoot.resolve("tools/xgo/build_android_xdmcore.py")',
      'xgoRepositoryRoot.resolve("tools/xgo/build_android_xdmcore_x86_64.py")'),
