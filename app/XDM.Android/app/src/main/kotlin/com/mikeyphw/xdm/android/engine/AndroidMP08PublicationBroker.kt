@@ -126,6 +126,7 @@ internal class AndroidMP08PublicationBroker(
         return readChunk(req, candidate.file, candidate.bytes)
     }
 
+    @androidx.annotation.RequiresApi(Build.VERSION_CODES.Q)
     private fun publishVerified(req: JSONObject, captureHash: String, name: String): JSONObject {
         val candidate = candidate(req, captureHash, name, true)
         require(safeDirectory(root) && safeDirectory(pending) && safeDirectory(published))
