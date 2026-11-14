@@ -14,6 +14,7 @@ const executeCalls = [];
 const handoffInputs = [];
 const events = {
   before: event(),
+  sent: event(),
   headers: event(),
   completed: event(),
   error: event(),
@@ -47,6 +48,7 @@ globalThis.browser = {
   },
   webRequest: {
     onBeforeSendHeaders: events.before,
+    onSendHeaders: events.sent,
     onHeadersReceived: events.headers,
     onCompleted: events.completed,
     onErrorOccurred: events.error
@@ -67,6 +69,7 @@ require(path.join(source, "candidate-store.js"));
 require(path.join(source, "network-observer.js"));
 
 assert.strictEqual(events.before.listeners.length, 1);
+assert.strictEqual(events.sent.listeners.length, 1, "final sent-header listener must be installed");
 assert.strictEqual(events.headers.listeners.length, 1);
 assert.strictEqual(events.message.listeners.length, 1, "page observation receiver registered synchronously");
 
@@ -288,6 +291,17 @@ assert.strictEqual(events.message.listeners.length, 1, "page observation receive
   assert.ok(!chooser.candidates[0].url.includes("master-one"), "chooser URL is credential-redacted/canonicalized");
   assert.ok(!chooser.candidates[0].url.includes("sig="), "canonical chooser URL removes volatile signing parameters entirely");
 
+  // Verified HLS body promotes retained privileged evidence: the child playlist
+  // body and later master playlist are linked only because matching privileged
+  // webRequest responses advertised a real manifest MIME in the same frame.
+  // Tab 11 above verifies an untrusted body without such MIME never promotes.
+  assert.ok(chooser.candidates[0].variantCount >= 1 &&
+    chooser.candidates[0].trackCount >= 1 &&
+    chooser.candidates[0].segmentCount >= 25,
+    "verified HLS body promotes retained privileged evidence");
+  assert.ok(!JSON.stringify(chooser.candidates).includes("sig=master-one"),
+    "privileged HLS body must not expose signed URL tokens to chooser data");
+
   const beforeChooserLaunch = executeCalls.length;
   const chosenId = chooser.candidates[0].logicalMediaId;
   const multiSelection = await messageListener({ type: "xdmSendLogicalCandidatesV2", tabId: tab20, logicalMediaIds: [chosenId, "forged-second-id"] }, {});
@@ -308,6 +322,58 @@ assert.strictEqual(events.message.listeners.length, 1, "page observation receive
   const stressedChooser = await messageListener({ type: "xdmGetLogicalCandidatesV2", tabId: tab20 }, {});
   assert.strictEqual(stressedChooser.logicalCandidateCount, 1, "rotating signed requests stay one logical media item");
   assert.ok(stressedChooser.candidates[0].observationCount >= 100, "raw observation volume is tracked independently from logical row count");
+
+
+  // Accept-Language must survive privileged request capture. Test both
+  // onBeforeSendHeaders (proposed / audit only) and onSendHeaders (final /
+  // executable), with deliberately different values to catch unsafe promotion.
+  const langTab = 31;
+  const langUrl = "https://cdn.example/lang/sample.mp4?sig=final-lang";
+  const langRequest = {
+    tabId: langTab, frameId: 0, requestId: "p07-hf05-language-final",
+    url: langUrl, documentUrl: "https://page.example/watch/31"
+  };
+  events.before.listeners[0]({ ...langRequest, requestHeaders: [
+    { name: "Accept-Language", value: "en-GB,en;q=0.9" },
+    { name: "Authorization", value: "Bearer proposed-only" }
+  ] });
+  events.sent.listeners[0]({ ...langRequest, requestHeaders: [
+    { name: "Accept-Language", value: "pt-BR,pt;q=0.8" },
+    { name: "Authorization", value: "Bearer final-sent-only" }
+  ] });
+  events.headers.listeners[0]({ ...langRequest, type: "media", responseHeaders: [
+    { name: "Content-Type", value: "video/mp4" }
+  ] });
+  const langChooser = await messageListener({ type: "xdmGetLogicalCandidatesV2", tabId: langTab }, {});
+  assert.strictEqual(langChooser.candidates.length, 1,
+    "matching webRequest response must retain one selectable media candidate");
+  const langSend = await messageListener({
+    type: "xdmSendLogicalCandidatesV2", tabId: langTab,
+    logicalMediaIds: [langChooser.candidates[0].logicalMediaId]
+  }, {});
+  assert.strictEqual(langSend.ok, true, langSend.error || "final-header selection failed");
+  const langHandoff = handoffInputs.slice().reverse().find(
+    input => input.pageUrl === "https://page.example/watch/31");
+  assert.ok(langHandoff && langHandoff.candidates.length === 1,
+    "explicit user selection must create exactly one privileged XDM capture");
+  const langCandidate = langHandoff.candidates[0];
+  assert.strictEqual(langCandidate.headers["accept-language"], "pt-BR,pt;q=0.8",
+    "only final sent Accept-Language is executable");
+  assert.strictEqual(langCandidate.headers.authorization, "Bearer final-sent-only",
+    "pre-send Authorization must never override final sent evidence");
+  assert.strictEqual(langCandidate.browserHandoff.finalHeaders.kind, "FinalSent");
+  assert.strictEqual(langCandidate.browserHandoff.finalHeaders.headers["accept-language"], "pt-BR,pt;q=0.8");
+  assert.strictEqual(langCandidate.browserHandoff.proposedHeaders.headers["accept-language"], "en-GB,en;q=0.9",
+    "proposed Accept-Language remains audit-only and cannot replace final evidence");
+  assert.notStrictEqual(langCandidate.headers.authorization, "Bearer proposed-only");
+  await new Promise(resolve => setTimeout(resolve, 650));
+  const offers31 = executeCalls.filter(call => call.tabId === langTab &&
+    String(call.options.code || "").includes("offerNetwork"))
+    .map(call => String(call.options.code || "")).join("\n");
+  assert.ok(!offers31.includes("Bearer final-sent-only") &&
+    !offers31.includes("Bearer proposed-only") &&
+    !offers31.includes("pt-BR,pt;q=0.8"),
+    "page-injected media offer must not expose replay headers");
 
   console.log("Phase 38 background smoke tests passed");
 })().catch(error => {
