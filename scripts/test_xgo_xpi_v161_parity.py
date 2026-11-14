@@ -9,13 +9,47 @@ MODULE=ROOT/'app/XDM.Android/browser-extension'
 SRC=MODULE/'src/main/extension/xdm-firefox'
 MANIFEST=ROOT/'docs/xgo/XGO_XPI_V161_REFERENCE_DIGESTS.json'
 VERSION='1.6.1'
-SIGNED_RELEASE_SHA='f84b6fe9830f938250e406b62087002558819fc95f333fe04219ae66ca8becd3'
+PINNED_ANDROID_WORKFLOW_BLOB='9db9afa13e9a5c7944d727888968bac6766ca043'
 
 def sha(blob):return hashlib.sha256(blob).hexdigest()
 def release_block(w):
     if w.count('\n  signed-release:\n')!=1 or w.count('\n  emulator-compatibility:\n')!=1:
         raise AssertionError('signed release boundary missing or duplicated')
     return w.split('\n  signed-release:\n',1)[1].split('\n  emulator-compatibility:\n',1)[0]
+
+def git_blob_sha(payload):
+    # Git's immutable object identity, independent of repo history or network.
+    return hashlib.sha1(b'blob '+str(len(payload)).encode('ascii')+b'\0'+payload).hexdigest()
+
+
+def signed_release_policy_violations(workflow):
+    """Current release behavior, not an obsolete historical text snapshot."""
+    problems=[]
+    try:
+        signed=release_block(workflow)
+    except AssertionError:
+        return ['signed job sections missing or ambiguous']
+    expected_if=("startsWith(github.ref, 'refs/tags/android-v') && "
+                 "(github.event_name == 'push' || "
+                 "(github.event_name == 'workflow_dispatch' && inputs.signed_release))")
+    conditions=re.findall(r'^    if: (.+)$',signed,re.M)
+    if conditions != [expected_if]:problems.append('tag-bound explicit signing opt-in')
+    if "on:\n  push:\n    tags: ['android-v*']\n  workflow_dispatch:" not in workflow:
+        problems.append('only protected tags and explicit workflow dispatch')
+    for marker in (
+        'XDM_RELEASE_SIGNER_SHA256: $'+'{{ secrets.XDM_RELEASE_SIGNER_SHA256 }}',
+        'XDM_RELEASE_STORE_PASSWORD: $'+'{{ secrets.XDM_RELEASE_STORE_PASSWORD }}',
+        'XDM_RELEASE_KEYSTORE_BASE64: $'+'{{ secrets.XDM_RELEASE_KEYSTORE_BASE64 }}',
+        'XDM_XAR16_FULL_RELEASE_GATE: "1"',
+        'run-hosted-emulator-instrumentation.sh --signed-release',
+        'name: xdm-android-signed-release',
+        'python3 tools/ensure-bundletool.py --print-path',
+        '- name: Attest Android publication metadata',
+    ):
+        if marker not in signed:problems.append('signed-release authority absent: '+marker)
+    if 'continue-on-error: true' in signed or '|| true' in signed:
+        problems.append('signed-release fail-open suppression')
+    return problems
 
 class XpiReferenceParity(unittest.TestCase):
     @classmethod
@@ -271,11 +305,50 @@ class XpiReferenceParity(unittest.TestCase):
         self.assertNotIn('Send ${count} to XDM', popup)
         self.assertIn('assertFalse(popup.contains(', parity)
 
-    def test_release_boundary_is_unchanged(self):
-        w=(ROOT/'.github/workflows/android.yml').read_text()
-        self.assertEqual(sha(release_block(w).encode()),SIGNED_RELEASE_SHA)
+    def test_release_job_immutable_workflow_and_tag_only_signing(self):
+        # HF07: the previous SHA256 was from an older release-job block.
+        # Anchor to the independently verified, immutable Git object for the
+        # current workflow, then assert explicit release safety conditions.
+        # This does NOT authorize any release or change the workflow.
+        raw=(ROOT/'.github/workflows/android.yml').read_bytes()
+        self.assertEqual(git_blob_sha(raw),PINNED_ANDROID_WORKFLOW_BLOB,
+                         'signed workflow changed: re-audit before updating the pinned blob')
+        w=raw.decode('utf-8')
+        self.assertEqual(signed_release_policy_violations(w),[])
         self.assertEqual(w.count('XP01 XPI v1.6.1 authored parity gate'),1)
         self.assertIn('scripts/test_xgo_xpi_v161_parity.py',w)
-        self.assertIn('XDM_XAR16_FULL_RELEASE_GATE',w)
+
+    def test_release_job_policy_mutation_refusals(self):
+        w=(ROOT/'.github/workflows/android.yml').read_text(encoding='utf-8')
+        self.assertEqual(signed_release_policy_violations(w),[])
+        mutations=(
+            ("startsWith(github.ref, 'refs/tags/android-v')", "startsWith(github.ref, 'refs/heads/main')"),
+            ('&& inputs.signed_release))','&& true))'),
+            ("tags: ['android-v*']","branches: ['*']"),
+            ('XDM_XAR16_FULL_RELEASE_GATE: "1"','XDM_XAR16_FULL_RELEASE_GATE: "0"'),
+            ('XDM_RELEASE_SIGNER_SHA256: $'+'{{ secrets.XDM_RELEASE_SIGNER_SHA256 }}',
+             'XDM_RELEASE_SIGNER_SHA256: ""'),
+            ('name: xdm-android-signed-release','name: xdm-android-unsigned-debug'),
+        )
+        for old,new in mutations:
+            with self.subTest(marker=old):
+                if old == "tags: ['android-v*']":
+                    # This is an event trigger, not a signed-release job field.
+                    # Limit replacement to the actual top-level trigger area.
+                    trigger, separator, tail = w.partition('\npermissions:\n')
+                    self.assertTrue(separator, 'top-level permissions boundary absent')
+                    self.assertEqual(trigger.count(old), 1, old)
+                    altered=trigger.replace(old,new,1)+separator+tail
+                else:
+                    # Other jobs legitimately mention the same tag condition.
+                    # Mutate the EXACT signed-release job being protected,
+                    # never the first global substring occurrence.
+                    signed=release_block(w)
+                    self.assertEqual(signed.count(old), 1, old)
+                    self.assertEqual(w.count(signed), 1, 'signed job not unique')
+                    altered=w.replace(signed,signed.replace(old,new,1),1)
+                self.assertTrue(signed_release_policy_violations(altered),old)
+        mutated=w.replace('  signed-release:\n','  signed-release:\n    continue-on-error: true\n',1)
+        self.assertTrue(signed_release_policy_violations(mutated))
 
 if __name__=='__main__':unittest.main(verbosity=2)
