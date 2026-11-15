@@ -34,8 +34,11 @@ MAX_ARTIFACT=220_000_000
 PINS={
  'scripts/xgo_hf16_apk_pair.py':'6bb9376ef422af8a052950de322a7d80e0d98688',
  'scripts/mp12_p02_provenance.py':'0fb1f07e4144c9b0c9e737ab51d908e202cbf3eb',
- 'scripts/mp12_p06_final_qualification.py':'424455cf14b229451c8c6bb87a868792becd9035',
- 'scripts/run_physical_arm64_instrumentation.sh':'872db6b4909764e94e2ea31f313274a8dd04bcb6',
+ 'scripts/mp12_p06_final_qualification.py':'d153e1177c963693256defd59858f7c541517662',
+ 'scripts/run_physical_arm64_instrumentation.sh':'4e4fc854eb6f7648e1819b0ec310599f539287d0',
+ 'scripts/xgo_arm64_physical_suite.py':'2cadb8c0626ab7e307bfa7410a9b3b862d5edc82',
+ 'scripts/xgo_arm64_expected_methods.json':'bbfe0138db952b0e2ab83ff0a8921498c602512e',
+ 'scripts/test_xgo_arm64_physical_suite.py':'f3163b083d5e4ba5dd510c4a5fcd97a42c371586',
  '.github/workflows/android.yml':'9db9afa13e9a5c7944d727888968bac6766ca043',
  '.github/workflows/xgo-targeted.yml':'242365dee226ac16a4e8ad9b83c045214df1f2d6',
 }

@@ -134,5 +134,14 @@ else:
         with self.assertRaisesRegex(ValueError, 'DESTINATION_NOT_EMPTY'):
             publish(self.app, self.test, out, self.aapt, 'a'*40, '42')
 
+    def test_p07_arm64_36_method_inventory_strict_and_architecture_filtered(self):
+        physical=(ROOT/'scripts/run_physical_arm64_instrumentation.sh').read_text()
+        self.assertIn('xgo_arm64_physical_suite.py',physical)
+        self.assertIn('XGO_ADB_EMULATOR_REFUSED',physical)
+        self.assertIn('XGO_ADB_NATIVE_ARM64_REQUIRED',physical)
+        check=subprocess.run([sys.executable,'-B',str(ROOT/'scripts/test_xgo_arm64_physical_suite.py')],
+                             cwd=ROOT,text=True,capture_output=True,timeout=60,check=False)
+        self.assertEqual(check.returncode,0,(check.stdout+'\n'+check.stderr)[-8000:])
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
