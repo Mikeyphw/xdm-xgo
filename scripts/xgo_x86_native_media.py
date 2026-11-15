@@ -55,6 +55,11 @@ NATIVE_FILES = {
  'lib/x86_64/libaria2c.so': 'app/XDM.Android/transfer-aria2/src/main/jniLibs/x86_64/libaria2c.so',
 }
 SHA = re.compile(r'^[0-9a-f]{40}$')
+# MP09's own production source changes the authority implementation, not its
+# ABI safety anchor. Permit exactly this independent Git blob and only on a
+# descendant of PR27's pinned base. Original x86 PR source pin remains exact.
+MP09_AUTHORITY_BLOB = 'cf34d0cbafede9baa78c22d4973eafc6eb3bd496'
+MP09_PARENT_SHA = '1a0806a069ae27eea322332c9f05f70cf6fd4d34'
 
 def refuse(reason: str) -> None:
     raise RuntimeError('XGO_X86_MEDIA_REFUSED: '+reason)
@@ -68,7 +73,19 @@ def git(*args: str, root: Path = ROOT) -> str:
 def checked_blob(path: Path, expected: str, root: Path = ROOT) -> str:
     if not path.is_file() or path.is_symlink(): refuse('missing/linked source: '+str(path))
     actual = git('hash-object', str(path), root=root)
-    if actual != expected: refuse('stale source '+str(path)+' expected='+expected+' got='+actual)
+    if actual != expected:
+        # The MP09 branch has a separate exact verified authority blob.
+        # This exception cannot authorize arbitrary changes, earlier branches,
+        # unbound commits, Gradle modifications, or any other native file.
+        if path != root / AUTH or actual != MP09_AUTHORITY_BLOB:
+            refuse('stale source '+str(path)+' expected='+expected+' got='+actual)
+        ancestry = subprocess.run(
+            ['git', '-C', str(root), 'merge-base', '--is-ancestor', MP09_PARENT_SHA, 'HEAD'],
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+            check=False, timeout=25,
+        )
+        if ancestry.returncode != 0:
+            refuse('MP09_AUTHORITY_BLOB_UNBOUND_TO_PINNED_PARENT')
     return path.read_text(encoding='utf-8')
 
 def check_pins(root: Path = ROOT) -> dict[str,str]:

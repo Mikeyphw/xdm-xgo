@@ -84,6 +84,13 @@ jobs:
             ${{ runner.temp }}/xgo-targeted-go-mod
             ${{ runner.temp }}/xgo-targeted-go-build
           key: ${{ runner.os }}-xgo-targeted-go123-v1-${{ hashFiles('engine/go.mod', 'engine/go.sum') }}
+      - name: MP12 P01 fixed evidence ledger source regressions (NOT release qualification)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B scripts/test_mp12_qualification.py
+          python3 -B scripts/mp12_qualification.py --source-only
+          python3 -B scripts/test_xgo_mp09_loopback_approval_source.py
       - name: Execute classified contracts and negative tests (no local/hosted Gradle)
         env:
           BASE_SHA: ${{ needs.scope.outputs.base_sha }}
@@ -121,7 +128,7 @@ jobs:
           set -euo pipefail
           sdkmanager 'platforms;android-36' 'build-tools;36.0.0'
           test "$(git rev-parse HEAD)" = '${{ needs.scope.outputs.head_sha }}'
-          ./gradlew --no-daemon --max-workers=2 :app:compileDebugKotlin
+          ./gradlew --no-daemon --max-workers=2 :app:compileDebugKotlin :media:test
 
   targeted-qualification:
     name: XGO targeted checks passed (NOT full qualification)

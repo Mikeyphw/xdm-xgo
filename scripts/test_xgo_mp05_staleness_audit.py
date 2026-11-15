@@ -42,6 +42,19 @@ def approved_ci05_node24_upgrade(source: str) -> str:
 ''','GO_ISOLATED_EXACT')
  once('      - uses: gradle/actions/setup-gradle@v6\n',
       '      - uses: gradle/actions/setup-gradle@v6\n        with:\n          cache-provider: basic\n','GRADLE_BASIC')
+ # MP12 P01: reconstruct the exact approved additive source gate; never
+ # waive the historical full-file workflow diff or inherited negatives.
+ once(
+  '      - name: Execute classified contracts and negative tests (no local/hosted Gradle)',
+  '''      - name: MP12 P01 fixed evidence ledger source regressions (NOT release qualification)
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 -B scripts/test_mp12_qualification.py
+          python3 -B scripts/mp12_qualification.py --source-only
+      - name: Execute classified contracts and negative tests (no local/hosted Gradle)''',
+  'MP12_P01_EXACT_SOURCE_STEP',
+ )
  return source
 
 class MP05Stale(unittest.TestCase):
@@ -100,10 +113,23 @@ class MP05Stale(unittest.TestCase):
     ('test "$SOURCE" = success','echo unsafe-bypass'),
     ('test "$ANDROID" = success','echo unsafe-bypass'),
     ('test "$(git rev-parse HEAD)" = "$HEAD_SHA"','echo unpinned'),
+    ('python3 -B scripts/test_mp12_qualification.py','echo skipped-mp12-tests'),
+    ('python3 -B scripts/mp12_qualification.py --source-only','echo skipped-mp12-audit'),
     (':app:compileDebugKotlin',':app:tasks'),
   ):
    self.assertIn(before,actual,before)
    self.assertNotEqual(actual.replace(before,after,1),approved,before)
+ def test_mp12_p01_preserves_ci05_full_file_pin_and_refuses_reapplication(self):
+  p='.github/workflows/xgo-targeted.yml'
+  expected=approved_ci05_node24_upgrade(self.baseline(p).decode('utf-8'))
+  actual=(ROOT/p).read_text(encoding='utf-8')
+  self.assertEqual(actual,expected)
+  self.assertEqual(actual.count('MP12 P01 fixed evidence ledger source regressions'),1)
+  self.assertEqual(actual.count('python3 -B scripts/test_mp12_qualification.py'),1)
+  self.assertEqual(actual.count('python3 -B scripts/mp12_qualification.py --source-only'),1)
+  with self.assertRaisesRegex(AssertionError,'MP05_CI05_MODERNIZATION_DRIFT'):
+   approved_ci05_node24_upgrade(expected)
+
  def test_inherited_mp04_contract_retargeted_without_weakening(self):
   p='scripts/test_xgo_mp04_staleness_audit.py'
   original=self.baseline(p).decode()

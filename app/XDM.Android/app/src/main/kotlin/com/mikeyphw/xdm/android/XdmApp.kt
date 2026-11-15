@@ -288,7 +288,7 @@ private fun XdmRouteContent(
                 mediaOutputAdmissionsInFlight = state.mediaOutputAdmissionsInFlight,
                 intakeFeedback = state.mediaIntakeFeedback,
                 browserCaptureSessions = state.browserCaptureSessions,
-                onPastePageUrl = viewModel::capturePageUrl,
+                onPastePageUrl = { url, approved -> viewModel.capturePageUrl(url, localFixtureApproved = approved) },
                 onBatchInput = viewModel::captureMediaBatchInput,
                 onDownload = viewModel::downloadMediaCapture,
                 onResumeOrRetryDownload = viewModel::togglePause,

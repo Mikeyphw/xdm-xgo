@@ -23,7 +23,21 @@ class EmulatorPersistenceContract(unittest.TestCase):
         self.assertIn('run-hosted-emulator-compatibility.sh', emulator)
         self.assertIn('gradle-version: \'9.7.1\'', emulator)
         self.assertIn('xdm-emulator-persistence-test-results', emulator)
-        self.assertEqual(w.count("      - 'scripts/test_xgo_emulator_persistence_ci.py'"), 2)
+        # CI05 routes PR/main checks through targeted CI. The full Android
+        # pipeline is intentionally tag/manual-only: two old path-trigger
+        # entries are no longer part of its contract.
+        events = w.split('on:\n', 1)[1].split('\npermissions:\n', 1)[0]
+        self.assertIn("  push:\n    tags: ['android-v*']", events)
+        self.assertIn('  workflow_dispatch:', events)
+        self.assertNotIn('  pull_request:', events)
+        self.assertNotIn('    branches: [main]', events)
+        self.assertEqual(w.count('run: python3 -B scripts/test_xgo_emulator_persistence_ci.py'), 1)
+        targeted = (ROOT / '.github/workflows/xgo-targeted.yml').read_text()
+        target_events = targeted.split('on:\n', 1)[1].split('\npermissions:\n', 1)[0]
+        self.assertIn('  pull_request:', target_events)
+        self.assertIn("  push:\n    branches: [main]", target_events)
+        self.assertIn('scripts/ci/xgo_ci_policy.py', targeted)
+        self.assertIn('    needs: validate', emulator)
         self.assertIn('XP02 emulator-persistence CI source and receipt regressions', w)
         self.assertIn('run-hosted-emulator-persistence-tests.sh', compat)
         self.assertIn(':persistence:connectedDebugAndroidTest', runner)
@@ -36,8 +50,14 @@ class EmulatorPersistenceContract(unittest.TestCase):
         self.assertIn('run-hosted-emulator-instrumentation.sh --signed-release', signed)
         self.assertIn('XDM_XAR16_PREVIOUS_RELEASE_APK', signed)
         self.assertIn('xdm-android-signed-release', signed)
-        self.assertIn('scripts/run_physical_arm64_instrumentation.sh', (ROOT / '.github/workflows/android.yml').read_text())
-        self.assertIn('XGO_REAL_ARM64_DEVICE_INSTRUMENTATION_PASS', (ROOT / 'scripts/run_physical_arm64_instrumentation.sh').read_text())
+        # Native ARM64 on a physical device is intentionally separate from
+        # hosted x86_64 emulator compatibility. Source presence and real ABI/
+        # emulator refusal guards are required; CI must not invoke this runner.
+        self.assertNotIn('run_physical_arm64_instrumentation.sh', w)
+        physical = (ROOT / 'scripts/run_physical_arm64_instrumentation.sh').read_text()
+        for gate in ('XGO_ADB_NATIVE_ARM64_REQUIRED', 'XGO_ADB_EMULATOR_REFUSED',
+                     'XGO_REAL_ARM64_DEVICE_INSTRUMENTATION_PASS'):
+            self.assertIn(gate, physical)
 
     def test_all_seven_persistence_classes_present(self):
         source = ROOT / 'app/XDM.Android/persistence/src/androidTest/kotlin/com/mikeyphw/xdm/android/persistence'

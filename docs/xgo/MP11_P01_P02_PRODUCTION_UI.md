@@ -1,0 +1,9 @@
+# MP11 P01+P02 — production live control and reauthorization UI (development)
+
+- **P01:** existing Media Inbox Compose capture card now exposes recording controls. Go `inspect_active` returns only safe read-only counters and DVR permission. The private foreground service remains the sole authority for Stop & Save, DVR Pause/Resume and explicitly confirmed Discard. A request is never reported as completed output.
+- **P01:** live review offers optional user limits of 0/15/30/60 minutes and 0/128/256/512 MiB; both bound the Go session and do not override Android foreground-service time budgets.
+- **P02:** a user-initiated refresh form accepts new HTTPS/HTTP manifest, selected video and selected audio URLs for the same origin; strings are transient Compose state only. The explicit action atomically writes a fresh capture request through the existing encrypted handoff, with NO implicit reuse of stale authorization headers. Only after that write succeeds does it send a private service refresh intent. Go/Android still verify exact source identity, previously committed fragment readback, overlap, and redirect/origin scope; rejects preserve bytes, journal and status as reviewable.
+- Refresh intentionally requires an **active interrupted process-local session**: after process death use existing `Review interrupted recording` and `Reauthorize & resume` (MP10 P03) rather than pretending an old service survived.
+- Header-bound authorization needs re-capture through Live Locator. UI does not implement a browser token refresh API or silently renew third-party credentials.
+- **Not claimed:** physical ARM64 validation, new MediaStore publication UI, 1DM oracle parity, real long-duration capture, Android background-start exemption, release qualification. PR remains draft and unmerged.
+- All Kotlin compilation and Android UI instrumentation must run in hosted GitHub Actions, never Gradle inside Termux.

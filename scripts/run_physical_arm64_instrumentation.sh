@@ -37,29 +37,23 @@ adb -s "$serial" install -r -t "$app"
 adb -s "$serial" install -r -t "$testapk"
 runner='com.mikeyphw.xdm.android.debug.test/androidx.test.runner.AndroidJUnitRunner'
 adb -s "$serial" shell pm list instrumentation | grep -Fq "$runner" || { echo "XGO_ADB_RUNNER_NOT_FOUND:$runner" >&2; exit 2; }
+# Reuse a single strict Python parser for discovery, execution and methods.
+# It requires INSTRUMENTATION_CODE: -1 plus all 36 exact ARM64 tests.
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+command -v python3 >/dev/null || { echo 'XGO_ADB_PYTHON3_MISSING' >&2; exit 2; }
 outdir="${XGO_ADB_EVIDENCE_DIR:-$PWD/xdm-arm64-device-evidence}"
+umask 077
 mkdir -p "$outdir"
-result="$outdir/instrumentation.txt"
-set +e
-adb -s "$serial" shell am instrument -w -r "$runner" 2>&1 | tee "$result"
-status=${PIPESTATUS[0]}
-set -e
-if (( status != 0 )); then
-  echo "XGO_ADB_INSTRUMENTATION_ADB_FAILED:exit=$status" >&2
-  exit "$status"
+# Fail closed: the native ARM64 path excludes only two known x86_64-only
+# classes, and refuses any missing/extra/duplicate required tests.
+if [[ -e "$outdir/receipt.txt" ]]; then
+  echo 'XGO_ADB_RECEIPT_ALREADY_EXISTS' >&2
+  exit 2
 fi
-if grep -Eqi '(FAILURES!!!|INSTRUMENTATION_FAILED|Process crashed|Error in |shortMsg=)' "$result"; then
-  echo 'XGO_ADB_INSTRUMENTATION_FAILED' >&2
-  exit 1
-fi
-if ! grep -Eq 'INSTRUMENTATION_CODE: -1' "$result"; then
-  echo 'XGO_ADB_INSTRUMENTATION_RESULT_MISSING' >&2
-  exit 1
-fi
-if ! grep -Eq 'OK \([1-9][0-9]* tests?\)' "$result"; then
-  echo 'XGO_ADB_POSITIVE_TEST_COUNT_MISSING' >&2
-  exit 1
-fi
+python3 -B "$repo_root/scripts/xgo_arm64_physical_suite.py" \
+  --serial "$serial" --runner "$runner" --outdir "$outdir"
+# The parent P07 acceptance command still reads this historical pass marker.
+# A separate evidence JSON explicitly refuses media-soak and release claims.
 {
   printf 'status=REAL_ARM64_DEVICE_INSTRUMENTATION_PASS\n'
   printf 'abi=%s\nsdk=%s\npage_size=%s\n' "$abi" "$sdk" "${page_size:-unknown}"

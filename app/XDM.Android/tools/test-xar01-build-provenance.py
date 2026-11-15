@@ -106,5 +106,65 @@ class Xar01BuildProvenanceTest(unittest.TestCase):
                 bundle.verify(bad)
 
 
+# HF02 regression: S01-11 event-driven Android CI, without path-filter fiction.
+# Historical release signing, toolchain and source-pinning checks stay unchanged.
+from xar01_ci_trigger_policy import audit_android_triggers
+
+
+class Xar01ExplicitAndroidTriggersTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls):
+        cls.workflow = (ROOT.parent.parent / '.github/workflows/android.yml').read_text(encoding='utf-8')
+
+    def test_real_workflow_accepts_tag_only_and_manual_default_off(self):
+        self.assertEqual(audit_android_triggers(self.workflow), [])
+
+    def test_old_path_filter_assumptions_not_required(self):
+        self.assertNotIn("- '.devtool.toml'", self.workflow)
+        self.assertNotIn("- 'build-release-apk.sh'", self.workflow)
+        self.assertEqual(audit_android_triggers(self.workflow), [])
+
+    def test_unsafe_trigger_and_signing_mutations_refuse(self):
+        cases = {
+            'push-main': ("    tags: ['android-v*']", "    branches: [main]"),
+            'push-all-tags': ("    tags: ['android-v*']", "    tags: ['*']"),
+            'push-all-branches': ("    tags: ['android-v*']", "    branches: ['*']"),
+            'push-no-restriction': ("    tags: ['android-v*']", "    tags: []"),
+            'automatic-pr': ("  workflow_dispatch:\n", "  pull_request:\n  workflow_dispatch:\n"),
+            'schedule': ("  workflow_dispatch:\n", "  schedule:\n  workflow_dispatch:\n"),
+            'duplicate-manual': ("  workflow_dispatch:\n", "  workflow_dispatch:\n  workflow_dispatch:\n"),
+            'signed-on-branch': ("if: startsWith(github.ref, 'refs/tags/android-v')", "if: startsWith(github.ref, 'refs/heads/main')"),
+            'signed-always': ("if: startsWith(github.ref, 'refs/tags/android-v')", "if: true # startsWith(github.ref, 'refs/tags/android-v')"),
+            'signed-auto-dispatch': ("&& inputs.signed_release))", "&& true))"),
+            'signed-allow-failure': ('  signed-release:\n', '  signed-release:\n    continue-on-error: true\n'),
+            'signed-skip-provenance': ('      XDM_XAR16_FULL_RELEASE_GATE: "1"', '      XDM_XAR16_FULL_RELEASE_GATE: "0"'),
+            'strip-signer': ('      XDM_RELEASE_SIGNER_SHA256:', '      XDM_RELEASE_SIGNER_SHA257:'),
+            'drop-artifact': ('name: xdm-android-physical-arm64-apk-pair', 'name: fake-apk-pair'),
+            'skip-preflight': ('  validate:\n    needs: hotfix-fast', '  validate:\n    needs: nope'),
+        }
+        for label, (old, new) in cases.items():
+            with self.subTest(label=label):
+                self.assertIn(old, self.workflow)
+                mutated = self.workflow.replace(old, new, 1)
+                self.assertTrue(audit_android_triggers(mutated), label)
+
+    def test_each_explicit_input_cannot_enable_itself(self):
+        for name in ('signed_release', 'arm64_translation_diagnostic', 'x86_64_native_test'):
+            block = self.workflow.split('      '+name+':\n', 1)[1]
+            import re
+            end = re.split(r'(?m)^      [a-z0-9_]+:\s*$', block, maxsplit=1)[0]
+            self.assertIn('default: false', end)
+            with self.subTest(name=name):
+                self.assertTrue(audit_android_triggers(self.workflow.replace(
+                    '      '+name+':\n'+end,
+                    '      '+name+':\n'+end.replace('default: false', 'default: true'), 1)))
+
+    def test_direct_path_filters_are_not_a_signed_release_substitute(self):
+        injected = self.workflow.replace("    tags: ['android-v*']", "    paths: ['.devtool.toml']", 1)
+        self.assertTrue(audit_android_triggers(injected))
+
+    def test_duplicate_on_mapping_refuses(self):
+        self.assertTrue(audit_android_triggers(self.workflow + '\non:\n  push:\n    tags: [\'android-v*\']\n'))
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

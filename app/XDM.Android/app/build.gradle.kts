@@ -111,6 +111,13 @@ val apkSetInstallVerified = validationEvidence("xdm.validation.apkSetInstalled")
 val publicationEvidenceVerified = validationEvidence("xdm.validation.publicationEvidenceVerified")
 val signedReleaseJourneysPassed = validationEvidence("xdm.validation.signedReleaseJourneysPassed")
 
+// MP11 P04 Compose-only, never selected for production or other instrumentation.
+val mp11P04IsolatedUiHost = providers.gradleProperty("xdm.mp11P04UiIsolatedHost")
+    .orNull?.let { value ->
+        require(value == "true" || value == "false") { "MP11_P04_INVALID_ISOLATION_PROPERTY" }
+        value == "true"
+    } ?: false
+
 android {
     namespace = "com.mikeyphw.xdm.android"
     compileSdk = 36
@@ -122,7 +129,9 @@ android {
         targetSdk = 36
         versionCode = 22
         versionName = "0.21.0"
-        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+        testInstrumentationRunner = if (mp11P04IsolatedUiHost)
+            "com.mikeyphw.xdm.android.MP11P04IsolatedComposeRunner"
+        else "androidx.test.runner.AndroidJUnitRunner"
         manifestPlaceholders["xdmBrowserScheme"] = "xdmdownload"
         buildConfigField("String", "XDM_BROWSER_SCHEME", "\"xdmdownload\"")
         buildConfigField("String", "XDM_RELEASE_BUILD_ID", buildConfigString(releaseBuildId))

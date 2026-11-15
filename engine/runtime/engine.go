@@ -64,6 +64,7 @@ type Engine struct {
 	desktopAuthority *desktopAuthorityStore
 	authorityErr     error
 	androidUI        *androidUIState
+	liveRecording   *mp09AndroidState
 	androidMedia     *androidMediaState
 	desktopUI        *desktopUIState
 	workers          sync.WaitGroup
@@ -142,6 +143,7 @@ func New(config Config) *Engine {
 	e.handlers[AndroidMediaSelectKind] = e.androidMediaSelectHandler
 	e.handlers[AndroidMediaExecuteKind] = e.androidMediaExecuteHandler
 	e.handlers[AndroidMediaResolveKind] = e.androidMediaResolveHandler
+	e.handlers[AndroidMediaLiveKind] = e.androidMediaLiveHandler
 	e.handlers[AndroidLegacyRoomImportKind] = e.androidLegacyRoomImportHandler
 	e.handlers[DesktopPublicationCommitKind] = e.desktopPublicationCommitHandler
 	e.handlers[DesktopSystemProxyKind] = e.desktopSystemProxyHandler

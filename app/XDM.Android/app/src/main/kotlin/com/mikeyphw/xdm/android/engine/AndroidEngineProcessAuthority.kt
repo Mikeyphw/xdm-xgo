@@ -129,7 +129,7 @@ class AndroidEngineProcessAuthority(context: Context) {
     }
 
     suspend fun submitMediaUiCommand(kind: String, payload: JSONObject): AndroidMediaUiCommandResult {
-        require(kind in setOf("android.media.capture", "android.media.select", "android.media.execute", "android.media.resolve_manifest")) { "unsupported Android media command kind" }
+        require(kind in setOf("android.media.capture", "android.media.select", "android.media.execute", "android.media.resolve_manifest", "android.media.live")) { "unsupported Android media command kind" }
         val requestId = payload.optString("client_request_id").takeIf(String::isNotBlank)
             ?: "media-ui-${uiCommandSequence.getAndIncrement()}"
         val commandPayload = JSONObject(payload.toString()).put("client_request_id", requestId)
@@ -137,6 +137,7 @@ class AndroidEngineProcessAuthority(context: Context) {
             "android.media.capture" -> "capture"
             "android.media.select" -> "select"
             "android.media.resolve_manifest" -> "resolve_manifest"
+            "android.media.live" -> "live"
             else -> "execute"
         }
         val currentBridge = synchronized(this) {
@@ -160,7 +161,12 @@ class AndroidEngineProcessAuthority(context: Context) {
         check(pendingMediaCommands.putIfAbsent(requestId, deferred) == null) { "duplicate Android media UI request id" }
         return try {
             currentBridge.command(uiCommand(kind, commandPayload, "media-ui:$requestId"))
-            withTimeout(if (kind == "android.media.resolve_manifest") 90_000L else UI_COMMAND_TIMEOUT_MS) { deferred.await() }
+            withTimeout(when {
+                kind == "android.media.live" && commandPayload.optString("action") == "stop_save" -> 1_800_000L
+                kind == "android.media.live" -> 90_000L
+                kind == "android.media.resolve_manifest" -> 90_000L
+                else -> UI_COMMAND_TIMEOUT_MS
+            }) { deferred.await() }
         } catch (error: Throwable) {
             pendingMediaCommands.remove(requestId)
             AndroidMediaUiCommandResult(requestId, action, false, errorCode = "engine_disconnected", message = error.message ?: "Go media command failed")
@@ -216,7 +222,12 @@ class AndroidEngineProcessAuthority(context: Context) {
             { (appContext as? AndroidMediaPlatformBrokerProvider)?.androidMediaPlatformBrokerOrNull() },
             AndroidAuthorizedManifestFetcher(appContext),
             AndroidDurableFragmentStore(appContext),
+            AndroidLiveDurableFragmentStore(appContext),
             AndroidMP08VerifiedStageBroker(
+                appContext,
+                com.mikeyphw.xdm.android.media.ffmpeg.EmbeddedFfmpegRuntime(appContext),
+            ),
+            AndroidLiveMP08VerifiedStageBroker(
                 appContext,
                 com.mikeyphw.xdm.android.media.ffmpeg.EmbeddedFfmpegRuntime(appContext),
             ),

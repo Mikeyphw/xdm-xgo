@@ -36,14 +36,27 @@ jobs:
           HEAD_SHA: ${{ github.event.pull_request.head.sha }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
           BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
           OWNER: ${{ github.event.pull_request.head.repo.full_name }}
           LABEL_NAME: ${{ github.event.label.name }}
         run: |
           set -euo pipefail
           [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
           test "$(git rev-parse HEAD)" = "$HEAD_SHA"
-          test "$BASE_SHA" = 36e8e318305023a8edbc5cff836bfeea2f5c56d6
-          test "$BASE_BRANCH" = feature/xgo-x86-media-runtimes-20261110
+          if [[ "$BASE_BRANCH" == feature/xgo-x86-media-runtimes-20261110 ]]; then
+            # Preserve the original exact-base x86_64 lane unchanged.
+            test "$BASE_SHA" = 36e8e318305023a8edbc5cff836bfeea2f5c56d6
+            test "$BASE_BRANCH" = feature/xgo-x86-media-runtimes-20261110
+          elif [[ "$BASE_BRANCH" == feature/xgo-mp09-p02-durable-live-poll-20261111 ]]; then
+            # MP09 PR28: a distinct opt-in path, pinned to the stacked PR27 base.
+            test "$BASE_SHA" = 1a0806a069ae27eea322332c9f05f70cf6fd4d34
+            test "$PR_NUMBER" = 28
+            test "$HEAD_BRANCH" = feature/xgo-mp09-consolidated-recording-20261111
+          else
+            echo 'XGO_X86_MEDIA_REFUSED_UNAPPROVED_STACKED_BASE' >&2
+            exit 2
+          fi
           test "$OWNER" = "$GITHUB_REPOSITORY"
           test "$LABEL_NAME" = xgo-x86-native-media
           git merge-base --is-ancestor "$BASE_SHA" "$HEAD_SHA"

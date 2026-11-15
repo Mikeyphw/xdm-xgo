@@ -15,7 +15,7 @@ STORE = ROOT / "app/XDM.Android/transfer-aria2/src/main/kotlin/com/mikeyphw/xdm/
 MANAGER = ROOT / "app/XDM.Android/transfer-aria2/src/main/kotlin/com/mikeyphw/xdm/android/transfer/aria2/Aria2ProcessManager.kt"
 DEVICE = ROOT / "app/XDM.Android/app/src/androidTest/kotlin/com/mikeyphw/xdm/android/Aria2Rm08PackagedRuntimeInstrumentedTest.kt"
 WORKFLOW = ROOT / ".github/workflows/android.yml"
-SIGNED_RELEASE_SHA256 = "f84b6fe9830f938250e406b62087002558819fc95f333fe04219ae66ca8becd3"
+SIGNED_RELEASE_SHA256 = "07f28376b630f5acf9bd6a1b1db873926e0e6e8bd7e2c98883ee37cbeb2836ed"  # Shared HF19 verified seal
 
 class HF20Aria2LaunchConfig(unittest.TestCase):
     def test_prepare_does_not_delete_an_inflight_rpc_secret(self):
@@ -54,21 +54,57 @@ class HF20Aria2LaunchConfig(unittest.TestCase):
         self.assertIn('fun packagedRuntimeEnforcesTlsAndRecoversSavedOwnedSession()',d)
 
     def test_workflow_keeps_real_native_payload_tests_and_no_duplicate_pr(self):
-        w=WORKFLOW.read_text()
+        w=WORKFLOW.read_text(encoding='utf-8')
+        events=w.split('on:\n',1)[1].split('\npermissions:\n',1)[0]
         self.assertIn('run: python3 -B scripts/test_xgo_hf20_aria2_launch_config.py',w)
         self.assertIn('run: python3 -B scripts/test_xgo_hf19_arm64_runtime_gate.py',w)
         self.assertIn('Verify pinned FFmpeg and FFprobe in the debug APK',w)
         self.assertIn('xdm-android-physical-arm64-apk-pair',w)
-        self.assertIn('branches: [main]',w)
-        self.assertIn('  pull_request:',w)
+        # HF18/HF19 already established: expensive Android CI is tag-only or
+        # manually dispatched. The targeted PR/main lanes are separate.
+        self.assertIn("  push:\n    tags: ['android-v*']",events)
+        self.assertIn('  workflow_dispatch:',events)
+        self.assertNotIn('  pull_request:',events)
+        self.assertNotIn('branches: [main]',events)
         self.assertIn("if: github.event_name == 'workflow_dispatch' && inputs.arm64_translation_diagnostic",w)
 
     def test_signed_release_gate_is_byte_for_byte_sealed(self):
-        w=WORKFLOW.read_text()
+        # HF20 must agree with the independently pinned HF19 release baseline,
+        # plus HF07's immutable workflow Git blob and semantic protections.
+        from test_xgo_hf19_arm64_runtime_gate import SIGNED_RELEASE_SHA256 as HF19_RELEASE_SHA256
+        from test_xgo_xpi_v161_parity import (PINNED_ANDROID_WORKFLOW_BLOB,
+            git_blob_sha, signed_release_policy_violations)
+        raw=WORKFLOW.read_bytes()
+        w=raw.decode('utf-8')
         block=w.split('\n  signed-release:\n',1)[1].split('\n  emulator-compatibility:\n',1)[0]
+        self.assertEqual(SIGNED_RELEASE_SHA256,HF19_RELEASE_SHA256)
         self.assertEqual(hashlib.sha256(block.encode('utf-8')).hexdigest(),SIGNED_RELEASE_SHA256)
+        self.assertEqual(git_blob_sha(raw),PINNED_ANDROID_WORKFLOW_BLOB)
+        self.assertEqual(signed_release_policy_violations(w),[])
         self.assertIn('XDM_XAR16_FULL_RELEASE_GATE',block)
         self.assertIn('run-hosted-emulator-instrumentation.sh --signed-release',block)
+
+    def test_release_policy_negative_mutations_rejected(self):
+        from test_xgo_xpi_v161_parity import signed_release_policy_violations, release_block
+        w=WORKFLOW.read_text(encoding='utf-8')
+        self.assertEqual(signed_release_policy_violations(w),[])
+        signed=release_block(w)
+        for old,new in (
+            ("startsWith(github.ref, 'refs/tags/android-v')", "startsWith(github.ref, 'refs/heads/main')"),
+            ('&& inputs.signed_release))', '&& true))'),
+            ('XDM_XAR16_FULL_RELEASE_GATE: "1"', 'XDM_XAR16_FULL_RELEASE_GATE: "0"'),
+            ('name: xdm-android-signed-release', 'name: xdm-android-test-release'),
+        ):
+            with self.subTest(marker=old):
+                self.assertEqual(signed.count(old),1,old)
+                mutated=w.replace(signed,signed.replace(old,new,1),1)
+                self.assertTrue(signed_release_policy_violations(mutated),old)
+        trigger,sep,tail=w.partition('\npermissions:\n')
+        self.assertTrue(sep)
+        mutated=trigger.replace("tags: ['android-v*']", "branches: ['*']",1)+sep+tail
+        self.assertTrue(signed_release_policy_violations(mutated),'tag trigger must fail closed')
+        mutated=w.replace('  signed-release:\n','  signed-release:\n    continue-on-error: true\n',1)
+        self.assertTrue(signed_release_policy_violations(mutated),'fail-open must be refused')
 
 if __name__ == '__main__':
     unittest.main(verbosity=2)
