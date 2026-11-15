@@ -97,14 +97,21 @@ def verify(data: str, expected: list[str], *, executed: bool) -> dict:
          'X86_TEST_OBSERVED')
     need('FAILURES!!!' not in data and 'INSTRUMENTATION_FAILED' not in data and
          'shortMsg=' not in data and 'Process crashed' not in data, 'FAILURE_MARKER')
-    need(re.search(r'(?m)^INSTRUMENTATION_CODE: -1\s*$', data) is not None,
-         'INSTRUMENTATION_CODE_MISSING')
+    # The final instrumentation code must appear once, in either mode.
+    need(len(re.findall(r'(?m)^INSTRUMENTATION_CODE: -1\s*$', data)) == 1 and
+         len(re.findall(r'(?m)^INSTRUMENTATION_CODE:', data)) == 1,
+         'INSTRUMENTATION_CODE_MISSING_OR_DUPLICATED')
+    need(all(finished[item] <= 1 for item in expected), 'TEST_SUCCESS_DUPLICATED')
     if executed:
         need(all(finished[item] == 1 for item in expected), 'TEST_SUCCESS_MISSING_OR_DUPLICATED')
         need(re.search(r'OK \(36 tests\)', data) is not None, 'JUNIT_36_SUCCESS_MISSING')
     else:
-        need(not finished, 'DRY_RUN_EXECUTED_TEST_UNEXPECTEDLY')
-        need('OK (36 tests)' not in data, 'DRY_RUN_NOT_A_RESULT')
+        # AndroidX log-only (-e log true) bypasses test bodies yet may emit
+        # STATUS_CODE: 0 and a normal-looking OK summary during enumeration.
+        # This branch can NEVER assert physical execution. Only run()'s
+        # separate instrumentation command WITHOUT 'log true' may do so.
+        summaries = re.findall(r'(?m)^OK \(([0-9]+) tests?\)\s*$', data)
+        need(not summaries or summaries == ['36'], 'DRY_RUN_SUMMARY_COUNT_MISMATCH')
     return {'test_count': len(expected), 'methods': sorted(expected), 'executed': executed}
 
 

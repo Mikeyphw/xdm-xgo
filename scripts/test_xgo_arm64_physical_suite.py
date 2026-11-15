@@ -89,7 +89,41 @@ class SourceAndRuntime(unittest.TestCase):
 
     def test_11_dry_run_cannot_succeed_as_execution(self):
         self.refused(m.verify,receipt(self.expected,executed=False),self.expected,executed=True)
-        self.refused(m.verify,receipt(self.expected,executed=True),self.expected,executed=False)
+        # AndroidX -e log true may produce completed-looking status codes.
+        # Discovery is never proof of test-body execution.
+        self.assertFalse(m.verify(receipt(self.expected,executed=True),
+                                  self.expected,executed=False)['executed'])
+
+    def test_11b_androidx_log_only_completed_status_is_not_execution(self):
+        enumeration = receipt(self.expected, executed=True)
+        self.assertFalse(m.verify(enumeration, self.expected, executed=False)['executed'])
+        self.refused(m.verify, receipt(self.expected, executed=False),
+                     self.expected, executed=True)
+
+    def test_11c_log_only_does_not_hide_bad_or_duplicate_result(self):
+        enumeration = receipt(self.expected, executed=True)
+        self.refused(m.verify, enumeration.replace('OK (36 tests)', 'OK (35 tests)'),
+                     self.expected, executed=False)
+        self.refused(m.verify, enumeration.replace('INSTRUMENTATION_CODE: -1',
+                     'INSTRUMENTATION_CODE: -1\nINSTRUMENTATION_CODE: -1'),
+                     self.expected, executed=False)
+        self.refused(m.verify, enumeration.replace('INSTRUMENTATION_CODE: -1',
+                     'INSTRUMENTATION_STATUS_CODE: -2\nINSTRUMENTATION_CODE: -1'),
+                     self.expected, executed=False)
+        cls, method = self.expected[0].split('#', 1)
+        extra = ('INSTRUMENTATION_STATUS: class=' + cls + '\n'
+                 'INSTRUMENTATION_STATUS: test=' + method + '\n'
+                 'INSTRUMENTATION_STATUS_CODE: 0\n')
+        self.refused(m.verify, enumeration.replace('INSTRUMENTATION_CODE: -1',
+                     extra + 'INSTRUMENTATION_CODE: -1'),
+                     self.expected, executed=False)
+
+    def test_11d_discovery_and_real_use_separate_instrumentation_invocations(self):
+        source = (m.ROOT / 'scripts/xgo_arm64_physical_suite.py').read_text()
+        self.assertIn("'-e', 'log', 'true', RUNNER", source)
+        self.assertIn('real = run_command([*base, RUNNER]', source)
+        self.assertIn('verify(dry.stdout, expected, executed=False)', source)
+        self.assertIn('verify(real.stdout, expected, executed=True)', source)
 
     def test_12_instrumentation_failure_marker(self):
         data=receipt(self.expected,executed=True)+'FAILURES!!!\n'
