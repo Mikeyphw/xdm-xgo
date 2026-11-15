@@ -80,6 +80,7 @@ import com.mikeyphw.xdm.android.media.MediaBatchIntakePlanner
 import com.mikeyphw.xdm.android.media.MediaSniffingEngine
 import com.mikeyphw.xdm.android.media.LogicalMediaGraphEngine
 import com.mikeyphw.xdm.android.media.MediaPageProbe
+import com.mikeyphw.xdm.android.media.XgoLoopbackFixtureApproval
 import com.mikeyphw.xdm.android.media.BrowserHandoffMediaCoordinator
 import com.mikeyphw.xdm.android.media.BrowserCaptureSessionRegistry
 import com.mikeyphw.xdm.android.media.MediaSniffingInput
@@ -3103,6 +3104,17 @@ class MainViewModel(
         val acceptedVariants = sameCaptureVariants.ifEmpty {
             if (plan.records.size == 1 && plan.variants.isNotEmpty()) plan.variants.map { it.rekeyForCapture(record.id) } else emptyList()
         }
+        // Source-bound exact scopes are created only for same-origin fixture
+        // child playlists after an existing approved root capture handoff.
+        val fixtureChildScopes = if (effectivePrivateApproved &&
+            storedHandoff?.privateNetworkApproved == true &&
+            storedHandoff.exactUrl == exactUrl &&
+            XgoLoopbackFixtureApproval.isApprovedRootShape(exactUrl)) {
+            acceptedVariants.mapNotNull { variant ->
+                variant.url.takeIf { XgoLoopbackFixtureApproval.isApprovedChildPlaylist(exactUrl, it) }
+                    ?.let(DownloadRequestApprovalScope::forUrl)
+            }.toSet()
+        } else emptySet()
 
         // Master playlists often carry no ENDLIST or EXT-X-KEY themselves. Probe a bounded set
         // of selected child media playlists so live/protection facts are based on media playlists
@@ -3116,7 +3128,7 @@ class MainViewModel(
                     requestHeaders = requestHeaders,
                     privateNetworkApproved = effectivePrivateApproved,
                     cleartextCredentialsApproved = effectiveCleartextApproved,
-                    privateNetworkApprovalScopes = effectivePrivateScopes,
+                    privateNetworkApprovalScopes = effectivePrivateScopes + fixtureChildScopes,
                     cleartextCredentialApprovalScopes = effectiveCleartextScopes,
                 ).records.firstOrNull { it.kind == MediaSourceKind.HlsPlaylist }?.let(childFacts::add)
             }
@@ -3659,15 +3671,28 @@ class MainViewModel(
         }
     }
 
-    fun capturePageUrl(pageUrl: String, pageTitle: String? = null) {
+    fun capturePageUrl(pageUrl: String, pageTitle: String? = null, localFixtureApproved: Boolean = false) {
         val normalized = pageUrl.trim()
         if (normalized.isBlank()) {
             publishMediaIntakeFeedback(MediaIntakeFeedbackUi(MediaIntakeFeedbackKind.Unsupported, "Paste a page or media URL", "XDM needs a non-empty HTTP(S) URL to inspect."))
             return
         }
+        // In-app fixture confirmation is the only authority for this manual flow;
+        // untrusted external requests still cannot authorize private networks.
+        val approved = localFixtureApproved && XgoLoopbackFixtureApproval.isApprovedRootShape(normalized)
+        val approvalScope = if (approved) DownloadRequestApprovalScope.forUrl(normalized) else null
+        if (approved && approvalScope == null) {
+            publishMediaIntakeFeedback(MediaIntakeFeedbackUi(MediaIntakeFeedbackKind.Unsupported,
+                "Fixture approval unavailable", "Could not bind the exact test URL to a network approval."))
+            return
+        }
         publishMediaIntakeFeedback(MediaIntakeFeedbackUi(MediaIntakeFeedbackKind.Working, "Checking page", "Checking this page for downloadable media."))
         viewModelScope.launch(Dispatchers.IO) {
-            runCatching { mediaPageProbe.probePage(normalized, pageTitle = pageTitle) }
+            runCatching {
+                mediaPageProbe.probePage(normalized, pageTitle = pageTitle,
+                    privateNetworkApproved = approved,
+                    privateNetworkApprovalScopes = if (approvalScope == null) emptySet() else setOf(approvalScope))
+            }
                 .onSuccess { plan ->
                     if (plan.records.isEmpty()) {
                         publishMediaIntakeFeedback(feedbackForEmptyMediaPlan(plan, "The page probe"))
@@ -3684,6 +3709,31 @@ class MainViewModel(
                     }
                     check(repository.saveMediaCapturesWithVariants(merged, plan.variants, now)) {
                         "Media capture batch changed while page inspection was resolving"
+                    }
+                    if (approved) {
+                        // The approved handoff is exclusively for the verified root
+                        // capture, never arbitrary media links discovered in HTML.
+                        val fixtureRootCapture = merged.singleOrNull { it.sourceUrl == normalized }
+                        val stored = fixtureRootCapture != null && MediaRequestHandoffStore.rememberCapture(
+                            captureId = fixtureRootCapture.id,
+                            headers = emptyMap(),
+                            redactedSummary = "User-approved local MP09 HLS fixture",
+                            isExpiringUrl = false,
+                            exactUrl = normalized,
+                            pageUrl = normalized,
+                            expiresAtEpochMs = now + 60L * 60L * 1000L,
+                            subjectGeneration = now,
+                            privateNetworkApproved = true,
+                            // MP03 asks Android for replay on every same-origin manifest.
+                            // This exact fixture handoff has no headers or secrets to replay;
+                            // the cleartext approval is still rooted to the consented URL.
+                            cleartextCredentialsApproved = true,
+                        )
+                        if (!stored) {
+                            publishMediaIntakeFeedback(MediaIntakeFeedbackUi(MediaIntakeFeedbackKind.Failed,
+                                "Fixture handoff unavailable", "No local network recording was authorized. Retry the fixture confirmation."))
+                            return@onSuccess
+                        }
                     }
                     publishMediaIntakeFeedback(MediaIntakeFeedbackUi(MediaIntakeFeedbackKind.Found, "Media ready", "${mediaItemCountLabel(merged.size)} added to Media.", plan.diagnostics.takeLast(4)))
                 }

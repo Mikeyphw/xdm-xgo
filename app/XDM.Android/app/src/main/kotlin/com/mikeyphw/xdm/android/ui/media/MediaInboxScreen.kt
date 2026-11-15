@@ -39,6 +39,7 @@ import com.mikeyphw.xdm.android.engine.AndroidMediaUiClient
 import com.mikeyphw.xdm.android.engine.AndroidMediaUiCommandResult
 import com.mikeyphw.xdm.android.engine.AndroidLiveRecordingService
 import com.mikeyphw.xdm.android.engine.AndroidLiveSelectionGate
+import com.mikeyphw.xdm.android.media.XgoLoopbackFixtureApproval
 import com.mikeyphw.xdm.android.engine.MP11LiveUiPolicy
 import com.mikeyphw.xdm.android.engine.MP11P04Diagnostics
 import com.mikeyphw.xdm.android.scheduler.MediaRequestHandoffStore
@@ -74,7 +75,7 @@ fun MediaInboxScreen(
     mediaOutputAdmissionsInFlight: Set<String>,
     intakeFeedback: MediaIntakeFeedbackUi,
     browserCaptureSessions: List<BrowserCaptureSessionSummary>,
-    onPastePageUrl: (String) -> Unit,
+    onPastePageUrl: (String, Boolean) -> Unit,
     onBatchInput: (String) -> Unit,
     onDownload: (MediaCaptureRecord, MediaTrackSelection, MediaOutputAdmissionMode) -> Unit,
     onResumeOrRetryDownload: (Download) -> Unit,
@@ -226,6 +227,8 @@ fun MediaInboxScreen(
     var batchText by rememberSaveable { mutableStateOf("") }
     var batchFeedback by remember { mutableStateOf<String?>(null) }
     var pageUrlText by rememberSaveable { mutableStateOf("") }
+    // Ephemeral user approval: do not restore this from saved UI state.
+    var pendingFixtureApproval by remember { mutableStateOf<String?>(null) }
     var mediaToolsExpanded by rememberSaveable { mutableStateOf(false) }
     val downloadsById = remember(downloads) { downloads.associateBy(Download::id) }
     val latestOutputsByCaptureId = remember(outputs) {
@@ -286,7 +289,12 @@ fun MediaInboxScreen(
                             singleLine = true,
                         )
                         XdmActionFlowRow {
-                            Button(onClick = { onPastePageUrl(pageUrlText) }, enabled = pageUrlText.isNotBlank()) { Text("Check URL") }
+                            Button(onClick = {
+                                val target = pageUrlText.trim()
+                                if (XgoLoopbackFixtureApproval.isApprovedRootShape(target))
+                                    pendingFixtureApproval = target
+                                else onPastePageUrl(target, false)
+                            }, enabled = pageUrlText.isNotBlank()) { Text("Check URL") }
                             Button(onClick = { context.startActivity(MediaLocatorActivity.intent(context, pageUrlText)) }) { Text("Live locator") }
                             TextButton(onClick = { mediaToolsExpanded = !mediaToolsExpanded }) {
                                 Text(if (mediaToolsExpanded) "Hide tools" else "More tools")
@@ -634,6 +642,22 @@ fun MediaInboxScreen(
                 } else liveFeedback = "Original capture unavailable; refreshed authorization required."
             },
             onKeep = { recoveryCaptureId = null },
+        )
+    }
+    pendingFixtureApproval?.let { expected ->
+        AlertDialog(
+            onDismissRequest = { pendingFixtureApproval = null },
+            title = { Text("Allow local HLS fixture?") },
+            text = { Text("Allow XGO to access the synthetic 127.0.0.1:8765 HLS fixture, including same-origin media playlists and segments. Other private-network addresses remain blocked.") },
+            confirmButton = {
+                TextButton(onClick = {
+                    pendingFixtureApproval = null
+                    if (pageUrlText.trim() == expected &&
+                        XgoLoopbackFixtureApproval.isApprovedRootShape(expected))
+                        onPastePageUrl(expected, true)
+                }) { Text("Allow this fixture") }
+            },
+            dismissButton = { TextButton(onClick = { pendingFixtureApproval = null }) { Text("Cancel") } },
         )
     }
     if (inspectingManifest != null) {
